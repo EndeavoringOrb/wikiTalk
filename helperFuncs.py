@@ -1,28 +1,29 @@
 import mwxml
 import os
+import line_profiler
+os.environ["LINE_PROFILE"] = "0"
 
+@line_profiler.profile
+def wikiLoader(folder, vocab):
+    for subFolder in os.listdir(folder):
+        if subFolder == "info.txt":
+            continue
+        for file in os.listdir(f"{folder}/{subFolder}"):
+            if file == "info.txt":
+                continue
 
-def wikiLoader(path, vocab):
-    # Load the Wikipedia dump
-    dump: mwxml.Dump = mwxml.Dump.from_file(path)
+            # Load the Wikipedia dump
+            dump: mwxml.Dump = mwxml.Dump.from_file(f"{folder}/{subFolder}/{file}")
 
-    # Iterate through pages
-    for i, page in enumerate(dump):
-        if page.namespace == 0 and page.redirect == None and hasattr(page, "title"):
-            title = page.title
-            text: str = ""
-            for revision in page:
-                text = revision.text
+            # Iterate through pages
+            for i, page in enumerate(dump):
+                if page.namespace == 0 and page.redirect == None and hasattr(page, "title"):
+                    title = page.title
+                    text: str = ""
+                    for revision in page:
+                        text = revision.text
 
-            title = title.lower().replace("–", "-")
-            validTitle = True
-            for char in title:
-                if char not in vocab:
-                    validTitle = False
-                    break
-
-            if validTitle:
-                yield title, text
+                    yield title, text
 
 
 def getNextDataFile(folder):

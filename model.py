@@ -1,16 +1,16 @@
 import torch.nn as nn
 import torch
+import torch.nn.functional as F
 
 # Define the RNN model
 class RNNLanguage(nn.Module):
     def __init__(self, vocabSize, embeddingDim, hiddenDim):
         super(RNNLanguage, self).__init__()
-        self.embedding = nn.Embedding(vocabSize, embeddingDim)
+        embeddingData = torch.normal(0, 0.02, (vocabSize, hiddenDim))
+        self.embedding = nn.Parameter(embeddingData)
 
-        self.ih = nn.Linear(embeddingDim, hiddenDim)
+        self.ih = nn.Linear(hiddenDim, hiddenDim)
         self.hh = nn.Linear(hiddenDim, hiddenDim)
-
-        self.fc = nn.Linear(hiddenDim, vocabSize)
 
         self.activation = nn.Tanh()
 
@@ -19,12 +19,24 @@ class RNNLanguage(nn.Module):
         self.hiddenDim = hiddenDim
 
     def forward(self, state, x):
-        embedded = self.embedding(x)
+        embedded = self.embedding[x]
         newState = self.activation(self.ih(embedded) + self.hh(state))
         return newState
     
+    def preprocess(self, x):
+        state = torch.zeros(self.hiddenDim)
+        for token in x:
+            state = self.forward(state, token)
+        return state
+    
+    def sample(self, state):
+        logits = self.logits(state)
+        probs = F.softmax(logits, dim=0)
+        token = torch.multinomial(probs, 1)
+        return token
+    
     def logits(self, state):
-        return self.fc(state)
+        return state @ self.embedding.T
 
 
 # Define the RNN model

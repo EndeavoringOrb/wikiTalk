@@ -6,6 +6,7 @@ import os
 from model import *
 from tqdm import tqdm
 from helperFuncs import *
+from trainEmbed import vocab
 
 modelSavePath = "models/embed/0.pt"
 
@@ -22,14 +23,16 @@ def getNumSteps(folder):
     files = sorted(files, key=lambda x: int(x.split(".")[0]))
 
     numSteps = 0
+    chars = set("м")
 
     for file in files:
         with open(f"{folder}/{file}", "r", encoding="utf-8") as f:
             data: list[str] = json.load(f)
         for chunk in data:
+            chars.update(chunk)
             numSteps += len(chunk)
 
-    return numSteps
+    return numSteps, sorted(list(chars))
 
 
 def dataLoader(folder):
@@ -43,7 +46,7 @@ def dataLoader(folder):
         yield (None, False, -1)
         for chunk in data:
             chunk_tensor = torch.tensor(
-                [mainVocab[character] for character in chunk.lower()]
+                [vocab[character] for character in chunk.lower()]
             )
             if chunk.startswith("User: "):
                 train = False
@@ -68,15 +71,13 @@ def dataLoader(folder):
 
 
 # Create vocab
-vocabChars = "abcdefghijklmnopqrstuvwxyz0123456789 ():.-',/?!&+#{}|\n=_[]<>;\"%*@$"
-vocabChars += "—–ł"
-mainVocab = {character: idx for idx, character in enumerate(vocabChars)}
+stepsPerEpoch, allChars = getNumSteps("conversationData")
 
 if __name__ == "__main__":
     # Hyperparameters
-    vocab_size = len(vocabChars)
+    vocabSize = len(allChars)
     embeddingDim = 32
-    hiddenDim = 16
+    hiddenDim = 32
     numEpochs = 100
     learningRate = 0.001
 
@@ -85,11 +86,12 @@ if __name__ == "__main__":
 
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
-    model = RNNLanguage(vocab_size, embeddingDim, hiddenDim)
+    model = RNNLanguage(vocabSize, embeddingDim, hiddenDim)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learningRate)
 
-    stepsPerEpoch = getNumSteps("conversationData")
+    print(f"Vocab Size: {vocabSize}")
+    print(f"Vocab: {vocab}")
     print(f"{stepsPerEpoch:,} steps per epoch.")
 
     # Training loop
@@ -140,6 +142,8 @@ if __name__ == "__main__":
         print(
             f"Epoch [{epoch+1}/{numEpochs}], Loss: {total_loss/numTrainSteps if numTrainSteps > 0 else 'nan':.4f}"
         )
+
+        del dataGen
 
         # Save the trained model
         torch.save(model, modelSavePath)

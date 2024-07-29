@@ -48,7 +48,11 @@ def loadEmbedData(folder):
 
 
 # Create vocab
-vocabChars = "abcdefghijklmnopqrstuvwxyz0123456789 ():.-',/?!&"
+vocabChars = "abcdefghijklmnopqrstuvwxyz0123456789 ():.-'\",/?!&"
+vocabChars += "éöōáíüłçóèäńøæãðūëòà+ñ̇ğâāå♯żαđúćıʼęìň×ạấýσêš½ŵôčąőδḥ*șśşʻïăēþîọīřț—ž¡²ṛķņœễěβõếû…ß°ṯṟμ"
+vocabChars += "źπṅảʽẩầứồươệļģỏ′ė­ṃů@=ÿ″ǫ̨ħ−ǂǃŭŝĵĥĝĉƒùť$ụĩũŏ%ṣủẹəỳữ£ǐľʿǁġṇ­­­­­­ṭ高雄ḫ道⅓∞űởờ¹^ỉ₂ḍḷ\\ẻʾį³ɛ̃ỹậộꞌʹ"
+vocabChars += "ǀị;∴~κắċ̄±ṉųớợằ–·→ố⟨⟩京東ďỗửừḵẫ₀ĕŷự꞉•"
+vocabChars = sorted(list(set(vocabChars.lower())))
 vocab = {character: idx for idx, character in enumerate(vocabChars)}
 
 if __name__ == "__main__":

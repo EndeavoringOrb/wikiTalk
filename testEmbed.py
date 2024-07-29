@@ -21,9 +21,4 @@ while True:
 
     similarity = model.getSimilarity(query_tensor, title_tensor)
 
-    # Normalize
-    length1 = torch.norm(query_tensor)
-    length2 = torch.norm(title_tensor)
-    similarity /= length1 * length2
-
     print(f"Similarity: {similarity.item()}")
