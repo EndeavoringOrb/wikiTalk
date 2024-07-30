@@ -3,31 +3,6 @@ from tqdm import tqdm
 from trainEmbed import vocab
 import os
 
-
-def countPages(folder):
-    numPages = 0
-    with tqdm(desc="counting pages") as pbar:
-        for subFolder in sorted(
-            os.listdir(folder), key=lambda x: int(x.strip("wiki")) if "wiki" in x else 0
-        ):
-            if subFolder == "info.txt":
-                continue
-            for file in os.listdir(f"{folder}/{subFolder}"):
-                if file == "info.txt":
-                    continue
-
-                pbar.set_description(f"counting pages [{folder}/{subFolder}]")
-
-                dump: mwxml.Dump = mwxml.Dump.from_file(f"{folder}/{subFolder}/{file}")
-
-                for page in dump:
-                    if page.namespace == 0 and page.redirect == None:
-                        numPages += 1
-                        pbar.update(1)
-
-    return numPages
-
-
 # Load the Wikipedia dump
 path = "wikiData\wiki0\enwiki-20240720-pages-articles-multistream1.xml-p1p41242"  # 27372
 path = "wikiData\wiki1\enwiki-20240720-pages-articles-multistream2.xml-p41243p151573"  # 83498

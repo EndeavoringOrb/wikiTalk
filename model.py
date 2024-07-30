@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 # Define the RNN model
 class RNNLanguage(nn.Module):
-    def __init__(self, vocabSize, embeddingDim, hiddenDim):
+    def __init__(self, vocabSize, hiddenDim):
         super(RNNLanguage, self).__init__()
         embeddingData = torch.normal(0, 0.02, (vocabSize, hiddenDim))
         self.embedding = nn.Parameter(embeddingData)
@@ -15,7 +15,6 @@ class RNNLanguage(nn.Module):
         self.activation = nn.Tanh()
 
         self.vocabSize = vocabSize
-        self.embeddingDim = embeddingDim
         self.hiddenDim = hiddenDim
 
     def forward(self, state, x):
@@ -36,16 +35,16 @@ class RNNLanguage(nn.Module):
         return token
     
     def logits(self, state):
-        return state @ self.embedding.T
+        return state @ self.embedding.T # we re-use the embedding matrix to save on param count
 
 
 # Define the RNN model
 class RNNEmbedder(nn.Module):
     def __init__(self, vocabSize, embeddingDim, hiddenDim):
         super(RNNEmbedder, self).__init__()
-        self.embedding = nn.Embedding(vocabSize, embeddingDim)
+        self.embedding = nn.Embedding(vocabSize, hiddenDim)
 
-        self.ih = nn.Linear(embeddingDim, hiddenDim)
+        self.ih = nn.Linear(hiddenDim, hiddenDim)
         self.hh = nn.Linear(hiddenDim, hiddenDim)
 
         self.fc = nn.Linear(hiddenDim, embeddingDim)

@@ -59,6 +59,7 @@ struct Matrix
     Matrix(int r, int c) : rows(r), cols(c)
     {
         data = new float[rows * cols];
+        zero();
     }
 
     ~Matrix()
@@ -83,35 +84,315 @@ struct Matrix
             data[i] = randDist(mean, std, randSeed);
         }
     }
+
+    void zero()
+    {
+        for (int i = 0; i < rows * cols; ++i)
+        {
+            data[i] = 0.0f;
+        }
+    }
 };
 
 struct RNNLanguageModel
 {
     int vocabSize;
     int hiddenDim;
+    int numParams;
 
-    Matrix embedding; // For token->tok_emb and state->logits
-    Matrix ih;        // for tok_emb->hidden1
-    Matrix hh;        // for state->hidden2
+    Matrix embedding;  // For token->tok_emb and state->logits
+    Matrix ih;         // for tok_emb->hidden1
+    Matrix hh;         // for state->hidden2
+    Matrix hiddenBias; // For bias after (hidden1 + hidden2)
+
+    int ihIndex;         // The index for the parameters of the ih matrix
+    int hhIndex;         // The index for the parameters of the hh matrix
+    int hiddenBiasIndex; // The index for the parameters of the hiddenBias matrix
+
+    Matrix inState;  // input state from forward
+    Matrix newState; // for intermediate hidden state
+    Matrix outState; // output state from forward
+
+    Matrix grad;
+    Matrix stateGrad;
+    Matrix dY_dRPrev;
+    Matrix dY_dPCurrent;
+    Matrix dL_dY;
+    Matrix dL_dP;
+    Matrix dR_dRPrev;
+    Matrix dR_dPCurrent;
+    Matrix delta;
 
     RNNLanguageModel(int _vocabSize, int _hiddenDim)
-        : embedding(_vocabSize, _hiddenDim), ih(_hiddenDim, _hiddenDim), hh(_hiddenDim, _hiddenDim)
+        : embedding(_vocabSize, _hiddenDim),
+          ih(_hiddenDim, _hiddenDim),
+          hh(_hiddenDim, _hiddenDim),
+          hiddenBias(1, _hiddenDim),
+
+          inState(1, _hiddenDim),
+          newState(1, _hiddenDim),
+          outState(1, _hiddenDim),
+
+          grad(1, _hiddenDim),
+          stateGrad(1, _hiddenDim),
+          dY_dRPrev(_vocabSize, _hiddenDim),
+          dY_dPCurrent(_vocabSize, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
+          dL_dY(1, _vocabSize),
+          dL_dP(1, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
+          dR_dRPrev(_hiddenDim, _hiddenDim),
+          dR_dPCurrent(_hiddenDim, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
+          delta(_hiddenDim, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim)
     {
         vocabSize = _vocabSize;
         hiddenDim = _hiddenDim;
+        numParams = _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim;
+
+        ihIndex = vocabSize * hiddenDim;
+        hhIndex = ihIndex + hiddenDim * hiddenDim;
+        hiddenBiasIndex = hhIndex + hiddenDim * hiddenDim;
 
         // Initialize matrix values
         uint32_t randSeed = 42;
         embedding.randomize(0.0f, 0.02f, randSeed);
         ih.randomize(0.0f, 0.02f, randSeed);
         hh.randomize(0.0f, 0.02f, randSeed);
+        hiddenBias.randomize(0.0f, 0.02f, randSeed);
+    }
+
+    void getdR(int token)
+    {
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                // activation
+                grad.data[j] = (1.0f + newState.data[j]); // Set grad after activation
+
+                // hiddenToHidden
+                float stateGradVal = 0.0f; // Init grad after hiddenToHidden
+                for (int k = 0; k < hiddenDim; k++)
+                {
+                    stateGradVal += hh.data[j * hiddenDim + k];                                                      // Accumulate grad after hiddenToHidden
+                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = grad.data[j] * inState.data[k]; // Set hh grad
+                }
+                dR_dRPrev.data[i * hiddenDim + j] = grad.data[j] * stateGradVal; // Set grad after hiddenToHidden
+
+                // inputToHidden
+                for (int k = 0; k < hiddenDim; k++)
+                {
+                    dR_dPCurrent.data[i * numParams + token * hiddenDim + j] += ih.data[j * hiddenDim + k];                                // Accumulate grad into embedding after inputToHidden
+                    dR_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + k] = grad.data[j] * embedding.data[token * hiddenDim + j]; // Set ih grad
+                }
+
+                // hiddenBias
+                dY_dPCurrent.data[i * numParams + hiddenBiasIndex + j] = grad.data[j]; // Set bias grad
+            }
+        }
+    }
+
+    void getdL(int token, Matrix &logits)
+    {
+        for (int i = 0; i < vocabSize; i++)
+        {
+            for (int j = 0; j < numParams; j++)
+            {
+                dL_dP.data[j] += ((i == token) ? -logits.data[i] : logits.data[i]) * dY_dPCurrent.data[i * numParams + j];
+            }
+        }
+    }
+
+    void getDelta()
+    {
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                for (int k = 0; k < numParams; k++)
+                {
+                    dR_dPCurrent.data[i * numParams + k] += dR_dRPrev.data[i * hiddenDim + j] * delta.data[j * numParams + k];
+                }
+            }
+        }
+        for (int i = 0; i < hiddenDim * numParams; i++)
+        {
+            delta.data[i] = dR_dPCurrent.data[i];
+        }
+    }
+
+    void getdY()
+    {
+        for (int i = 0; i < vocabSize; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                for (int k = 0; k < numParams; k++)
+                {
+                    dY_dPCurrent.data[i * numParams + k] += dY_dRPrev.data[i * hiddenDim + j] * delta.data[j * numParams + k];
+                }
+            }
+        }
+    }
+
+    void getdYCurrent(int token)
+    {
+        for (int i = 0; i < vocabSize; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                // logits
+                grad.data[j] = embedding.data[i * hiddenDim + j];                        // Set grad after logits projection
+                dY_dPCurrent.data[i * numParams + i * hiddenDim + j] = outState.data[j]; // Set embedding grad
+
+                // activation
+                grad.data[j] *= (1.0f + newState.data[j]); // Set grad after activation
+
+                // hiddenToHidden
+                float stateGradVal = 0.0f; // Init grad after hiddenToHidden
+                for (int k = 0; k < hiddenDim; k++)
+                {
+                    stateGradVal += hh.data[j * hiddenDim + k];                                                      // Accumulate grad after hiddenToHidden
+                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = grad.data[j] * inState.data[k]; // Set hh grad
+                }
+                dY_dRPrev.data[i * hiddenDim + j] = grad.data[j] * stateGradVal; // Set grad after hiddenToHidden
+
+                // inputToHidden
+                for (int k = 0; k < hiddenDim; k++)
+                {
+                    dY_dPCurrent.data[i * numParams + token * hiddenDim + j] += ih.data[j * hiddenDim + k];                                // Accumulate grad into embedding after inputToHidden
+                    dY_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + k] = grad.data[j] * embedding.data[token * hiddenDim + j]; // Set ih grad
+                }
+
+                // hiddenBias
+                dY_dPCurrent.data[i * numParams + hiddenBiasIndex + j] = grad.data[j]; // Set bias grad
+            }
+        }
+    }
+
+    void updateParams(const float learningRate)
+    {
+        // Update embedding
+        for (int i = 0; i < vocabSize * hiddenDim; i++)
+        {
+            embedding.data[i] -= learningRate * dL_dP.data[i];
+        }
+
+        // Update hh
+        for (int i = 0; i < hiddenDim * hiddenDim; i++)
+        {
+            hh.data[i] -= learningRate * dL_dP.data[i + hhIndex];
+        }
+
+        // Update ih
+        for (int i = 0; i < hiddenDim * hiddenDim; i++)
+        {
+            ih.data[i] -= learningRate * dL_dP.data[i + ihIndex];
+        }
+
+        // Update bias
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            hiddenBias.data[i] -= learningRate * dL_dP.data[i + hiddenBiasIndex];
+        }
+    }
+
+    void forward(Matrix &state, int token)
+    {
+        newState.zero();
+        inputToHidden(token);
+        hiddenToHidden(state);
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            newState.data[i] += hiddenBias.data[i];
+        }
+        activation(newState, state);
+        // copy state values to outState
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            outState.data[i] = state.data[i];
+        }
+    }
+
+    // logits = state @ embedding.T
+    void getLogits(Matrix &state, Matrix &logits)
+    {
+        logits.zero();
+        for (int i = 0; i < vocabSize; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                logits.data[i] += state.data[j] * embedding.data[i * hiddenDim + j];
+            }
+        }
+    }
+
+    // newState += embedding[token] @ ih
+    void inputToHidden(int token)
+    {
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                newState.data[i] += embedding.data[hiddenDim * token + i] * ih.data[i * hiddenDim + j];
+            }
+        }
+    }
+
+    // newState += state @ hh
+    void hiddenToHidden(Matrix &state)
+    {
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                newState.data[i] += state.data[i] * hh.data[i * hiddenDim + j];
+            }
+        }
+    }
+
+    // x = 1 + x + (x^2 / 2)
+    void activation(Matrix &in, Matrix &out)
+    {
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            const float x = in.data[i];
+            out.data[i] = 1.0f + x + x * x * 0.5f;
+        }
     }
 };
+
+void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits, bool train)
+{
+    if (train)
+    {
+        model.getLogits(state, logits);
+        model.getdYCurrent(token);
+        model.getdY();
+        model.getdL(token, logits);
+    }
+
+    model.getdR(token);
+    model.getDelta();
+}
 
 int main()
 {
     int vocabSize = 4;
     int hiddenDim = 2;
+    float learningRate = 0.1f;
+
+    RNNLanguageModel model = RNNLanguageModel(vocabSize, hiddenDim);
+
+    Matrix state = Matrix(1, hiddenDim);
+    Matrix logits = Matrix(1, vocabSize);
+
+    for (int i = 0; i < 100; i++)
+    {
+        for (int j = 0; j < 10; j++)
+        {
+            trainStep(0, model, state, logits, true);
+        }
+        model.updateParams(learningRate);
+    }
 
     return 0;
 }

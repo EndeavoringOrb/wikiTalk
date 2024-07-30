@@ -4,3 +4,5 @@ conversationData
 embeddingData
 __pycache__
 models
+tokenData
+.vscode
