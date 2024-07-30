@@ -274,7 +274,9 @@ struct RNNLanguageModel
                 dY_dPCurrent.data[i * numParams + i * hiddenDim + j] = state.data[j]; // Set embedding grad
 
                 // activation
-                grad.data[j] *= (1.0f + newState.data[j]); // Set grad after activation
+                const float x = abs(newState.data[j]);
+                const float term1 = x * x + x + x + 4.0f; // x^2 + 2x + 4
+                grad.data[j] *= (8 * (x + 1.0f)) / (term1 * term1);
 
                 // hiddenToHidden
                 float stateGradVal = 0.0f; // Init grad after hiddenToHidden
