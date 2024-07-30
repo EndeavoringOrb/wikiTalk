@@ -1,6 +1,10 @@
+#include <iostream>
 #include <stdint.h>
 #include <limits>
 #include <cmath>
+#include <iomanip>
+#include <chrono>
+#include <thread>
 
 constexpr float PI = 3.14159265358979323846;
 
@@ -50,6 +54,15 @@ float randDist(const float mean, const float std, uint32_t &randSeed)
     return z0;
 }
 
+void clearLines(int numLines)
+{
+    for (int i = 0; i < numLines; i++)
+    {
+        std::cout << "\033[F\033[K";
+    }
+    std::flush(std::cout);
+}
+
 struct Matrix
 {
     float *data;
@@ -92,6 +105,24 @@ struct Matrix
             data[i] = 0.0f;
         }
     }
+
+    void print(std::string name)
+    {
+        std::cout << std::fixed << std::setprecision(2);
+        std::cout << name << ": (" << rows << ", " << cols << ")" << std::endl;
+        for (int i = 0; i < rows; i++)
+        {
+            for (int j = 0; j < cols; j++)
+            {
+                if (j > 0)
+                {
+                    std::cout << ", ";
+                }
+                std::cout << data[i * cols + j];
+            }
+            std::cout << "\n";
+        }
+    }
 };
 
 struct RNNLanguageModel
@@ -111,7 +142,6 @@ struct RNNLanguageModel
 
     Matrix inState;  // input state from forward
     Matrix newState; // for intermediate hidden state
-    Matrix outState; // output state from forward
 
     Matrix grad;
     Matrix stateGrad;
@@ -131,7 +161,6 @@ struct RNNLanguageModel
 
           inState(1, _hiddenDim),
           newState(1, _hiddenDim),
-          outState(1, _hiddenDim),
 
           grad(1, _hiddenDim),
           stateGrad(1, _hiddenDim),
@@ -196,7 +225,7 @@ struct RNNLanguageModel
         {
             for (int j = 0; j < numParams; j++)
             {
-                dL_dP.data[j] += ((i == token) ? -logits.data[i] : logits.data[i]) * dY_dPCurrent.data[i * numParams + j];
+                dL_dP.data[j] += ((i == token) ? -1 : 1) * dY_dPCurrent.data[i * numParams + j];
             }
         }
     }
@@ -233,15 +262,16 @@ struct RNNLanguageModel
         }
     }
 
-    void getdYCurrent(int token)
+    void getdYCurrent(int token, Matrix &state)
     {
+        dY_dPCurrent.zero();
         for (int i = 0; i < vocabSize; i++)
         {
             for (int j = 0; j < hiddenDim; j++)
             {
                 // logits
-                grad.data[j] = embedding.data[i * hiddenDim + j];                        // Set grad after logits projection
-                dY_dPCurrent.data[i * numParams + i * hiddenDim + j] = outState.data[j]; // Set embedding grad
+                grad.data[j] = embedding.data[i * hiddenDim + j];                     // Set grad after logits projection
+                dY_dPCurrent.data[i * numParams + i * hiddenDim + j] = state.data[j]; // Set embedding grad
 
                 // activation
                 grad.data[j] *= (1.0f + newState.data[j]); // Set grad after activation
@@ -264,6 +294,19 @@ struct RNNLanguageModel
 
                 // hiddenBias
                 dY_dPCurrent.data[i * numParams + hiddenBiasIndex + j] = grad.data[j]; // Set bias grad
+            }
+        }
+    }
+
+    void getdYdLogits(int token, Matrix &state)
+    {
+        dY_dPCurrent.zero();
+        for (int i = 0; i < vocabSize; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                // logits
+                dY_dPCurrent.data[i * numParams + i * hiddenDim + j] = state.data[j]; // Set embedding grad
             }
         }
     }
@@ -295,6 +338,22 @@ struct RNNLanguageModel
         }
     }
 
+    void reset()
+    {
+        // Reset all values
+        inState.zero();
+        newState.zero();
+        grad.zero();
+        stateGrad.zero();
+        dY_dRPrev.zero();
+        dY_dPCurrent.zero();
+        dL_dY.zero();
+        dL_dP.zero();
+        dR_dRPrev.zero();
+        dR_dPCurrent.zero();
+        delta.zero();
+    }
+
     void forward(Matrix &state, int token)
     {
         newState.zero();
@@ -305,11 +364,6 @@ struct RNNLanguageModel
             newState.data[i] += hiddenBias.data[i];
         }
         activation(newState, state);
-        // copy state values to outState
-        for (int i = 0; i < hiddenDim; i++)
-        {
-            outState.data[i] = state.data[i];
-        }
     }
 
     // logits = state @ embedding.T
@@ -355,21 +409,44 @@ struct RNNLanguageModel
         for (int i = 0; i < hiddenDim; i++)
         {
             const float x = in.data[i];
-            out.data[i] = 1.0f + x + x * x * 0.5f;
+            if (x < 0.0f)
+            {
+                const float absX = abs(x);
+                out.data[i] = -(1.0f + absX + absX * absX * 0.5f);
+            }
+            else
+            {
+                out.data[i] = 1.0f + x + x * x * 0.5f;
+            }
         }
     }
 };
 
-void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits, bool train)
+void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits, bool train, int stepNum)
 {
     if (train)
     {
         model.getLogits(state, logits);
-        model.getdYCurrent(token);
+        logits.print("logits");
+        if (stepNum == 0)
+        {
+            model.getdYdLogits(token, state); // if this is the first step, only the embedding matrix has been used so we only calculate grad for the embedding matrix
+        }
+        else
+        {
+            model.getdYCurrent(token, state);
+        }
+
+        model.dY_dPCurrent.print("dY_dPCurrent");
         model.getdY();
+        model.dY_dPCurrent.print("dY_dP");
         model.getdL(token, logits);
+        model.dL_dP.print("dL_dP");
     }
 
+    state.print("state0");
+    model.forward(state, token);
+    state.print("state1");
     model.getdR(token);
     model.getDelta();
 }
@@ -380,17 +457,26 @@ int main()
     int hiddenDim = 2;
     float learningRate = 0.1f;
 
+    std::cout << "Initializing..." << std::endl;
     RNNLanguageModel model = RNNLanguageModel(vocabSize, hiddenDim);
 
     Matrix state = Matrix(1, hiddenDim);
     Matrix logits = Matrix(1, vocabSize);
 
+    std::cout << "Training..." << std::endl;
+    std::cout << logits.data[0] << std::endl;
+
     for (int i = 0; i < 100; i++)
     {
+        state.zero();
+        model.reset();
         for (int j = 0; j < 10; j++)
         {
-            trainStep(0, model, state, logits, true);
+            trainStep(0, model, state, logits, true, j);
+            clearLines(1);
+            std::cout << logits.data[0] << std::endl;
         }
+
         model.updateParams(learningRate);
     }
 
