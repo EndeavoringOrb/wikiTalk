@@ -6,6 +6,8 @@
 #include <chrono>
 #include <thread>
 
+constexpr bool DEBUG_PRINT = false;
+
 constexpr float PI = 3.14159265358979323846;
 
 /**
@@ -108,19 +110,22 @@ struct Matrix
 
     void print(std::string name)
     {
-        std::cout << std::fixed << std::setprecision(2);
-        std::cout << name << ": (" << rows << ", " << cols << ")" << std::endl;
-        for (int i = 0; i < rows; i++)
+        if (DEBUG_PRINT)
         {
-            for (int j = 0; j < cols; j++)
+            std::cout << std::fixed << std::setprecision(2);
+            std::cout << name << ": (" << rows << ", " << cols << ")" << std::endl;
+            for (int i = 0; i < rows; i++)
             {
-                if (j > 0)
+                for (int j = 0; j < cols; j++)
                 {
-                    std::cout << ", ";
+                    if (j > 0)
+                    {
+                        std::cout << ", ";
+                    }
+                    std::cout << data[i * cols + j];
                 }
-                std::cout << data[i * cols + j];
+                std::cout << "\n";
             }
-            std::cout << "\n";
         }
     }
 };
