@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <chrono>
 #include <thread>
+#include <algorithm>
 
 constexpr bool DEBUG_PRINT = true;
 constexpr bool CLIP_GRADS = true;
@@ -130,10 +131,7 @@ struct Matrix
 
     void copy(Matrix &other)
     {
-        for (int i = 0; i < numValues; i++)
-        {
-            data[i] = other.data[i];
-        }
+        std::copy(other.data, other.data + numValues, data);
     }
 
     // Prints the matrix to the terminal
@@ -226,8 +224,9 @@ struct RNNLanguageModel
         {
             // activation
             const float x = absFloat(state.data[i]);
-            const float term1 = x * x + x + x + 4.0f;           // x^2 + 2x + 4
-            float gradVal = (8 * (x + 1.0f)) / (term1 * term1); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
+            const float term1 = x + 1.0f;
+            const float term2 = x * x + term1;
+            float gradVal = (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
 
             // hiddenToHidden
             const float normVal = hh.norm(i);
@@ -314,8 +313,9 @@ struct RNNLanguageModel
 
                 // activation
                 const float x = absFloat(newState.data[j]);
-                const float term1 = x * x + x + x + 4.0f; // x^2 + 2x + 4
-                gradVal *= (8 * (x + 1.0f)) / (term1 * term1);
+                const float term1 = x + 1.0f;
+                const float term2 = x * x + term1;
+                gradVal *= (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
 
                 // hiddenToHidden
                 const float normVal = hh.norm(j);
@@ -531,7 +531,6 @@ int main()
     Matrix logits = Matrix(1, vocabSize);
 
     std::cout << "Training..." << std::endl;
-    std::cout << logits.data[0] << std::endl;
 
     for (int i = 0; i < 100; i++)
     {
@@ -540,8 +539,6 @@ int main()
         for (int j = 0; j < 10; j++)
         {
             trainStep(0, model, state, logits, true, j);
-            clearLines(1);
-            std::cout << logits.data[0] << std::endl;
         }
 
         model.updateParams(learningRate);
