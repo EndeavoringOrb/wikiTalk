@@ -159,6 +159,61 @@ struct Matrix
     }
 };
 
+struct AdamOptimizer
+{
+    int nParams;
+    Matrix m;
+    Matrix v;
+    float alpha;      // the learning rate. good default value: 1e-2
+    float beta1;      // good default value: 0.9
+    float beta1Power; // used instead of calculating a std::pow every iteration
+    float beta2;      // good default value: 0.999
+    float beta2Power; // used instead of calculating a std::pow every iteration
+    int t = 0;
+    float eps;
+
+    AdamOptimizer(int _nParams, float _alpha, float _beta1, float _beta2, float _eps) : m(1, _nParams),
+                                                                                        v(1, _nParams)
+    {
+        nParams = _nParams;
+        alpha = _alpha;
+        beta1 = _beta1;
+        beta2 = _beta2;
+        beta1Power = beta1;
+        beta2Power = beta2;
+        eps = _eps;
+    }
+
+    void getGrads(Matrix &grad)
+    {
+        // Compute constants
+        const float beta1Minus = 1.0f - beta1;
+        const float beta2Minus = 1.0f - beta2;
+        const float mHatMul = 1.0f / (1.0f - beta1Power);
+        const float vHatMul = 1.0f / (1.0f - beta2Power);
+        for (int i = 0; i < nParams; i++)
+        {
+            // Compute m and mHat
+            const float mVal = beta1 * m.data[i] + beta1Minus * grad.data[i];
+            m.data[i] = mVal;
+            const float mHatVal = mVal * mHatMul;
+
+            // Compute v and vHat
+            const float vVal = beta2 * v.data[i] + beta2Minus * grad.data[i] * grad.data[i];
+            v.data[i] = vVal;
+            const float vHatVal = vVal * vHatMul;
+
+            // Compute new grad
+            grad.data[i] = alpha * mHatVal / (sqrtf(vHatVal) + eps);
+        }
+
+        // Increase values
+        beta1Power *= beta1;
+        beta2Power *= beta2;
+        t++;
+    }
+};
+
 struct RNNLanguageModel
 {
     int vocabSize;
@@ -319,14 +374,51 @@ struct RNNLanguageModel
         }
     }
 
-    void getdL(int token, Matrix &logits)
+    void getdL(int token, Matrix &probs)
     {
+        // Get dL_dY
         for (int i = 0; i < vocabSize; i++)
+        {
+            if (i == token)
+            {
+                dL_dY.data[i] = -1.0f / probs.data[i];
+            }
+            else
+            {
+                dL_dY.data[i] = 1.0f / (1.0f - probs.data[i]);
+            }
+        }
+        // softmax backward
+        float dot = 0.0f;
+        for (int i = 0; i < vocabSize; i++)
+        {
+            dot += dL_dY.data[i] * probs.data[i];
+        }
+        for (int i = 0; i < vocabSize; i++)
+        {
+            dL_dY.data[i] = probs.data[i] * (dL_dY.data[i] - dot);
+        }
+
+        // dL_dP = dL_dY @ dY_dP
+        for (int i = 0; i < token; i++)
         {
             for (int j = 0; j < numParams; j++)
             {
-                dL_dP.data[j] += ((i == token) ? -1 : 1) * dY_dPCurrent.data[i * numParams + j];
+                dL_dP.data[j] += dL_dY.data[i] * dY_dPCurrent.data[i * numParams + j];
             }
+        }
+
+        for (int i = token + 1; i < vocabSize; i++)
+        {
+            for (int j = 0; j < numParams; j++)
+            {
+                dL_dP.data[j] += dL_dY.data[i] * dY_dPCurrent.data[i * numParams + j];
+            }
+        }
+
+        for (int j = 0; j < numParams; j++)
+        {
+            dL_dP.data[j] -= dL_dY.data[token] * dY_dPCurrent.data[token * numParams + j];
         }
     }
 
@@ -422,30 +514,30 @@ struct RNNLanguageModel
         }
     }
 
-    void updateParams(const float learningRate)
+    void updateParams()
     {
         // Update embedding
         for (int i = 0; i < vocabSize * hiddenDim; i++)
         {
-            embedding.data[i] -= learningRate * dL_dP.data[i];
+            embedding.data[i] -= dL_dP.data[i];
         }
 
         // Update hh
         for (int i = 0; i < hiddenDim * hiddenDim; i++)
         {
-            hh.data[i] -= learningRate * dL_dP.data[i + hhIndex];
+            hh.data[i] -= dL_dP.data[i + hhIndex];
         }
 
         // Update ih
         for (int i = 0; i < hiddenDim * hiddenDim; i++)
         {
-            ih.data[i] -= learningRate * dL_dP.data[i + ihIndex];
+            ih.data[i] -= dL_dP.data[i + ihIndex];
         }
 
         // Update bias
         for (int i = 0; i < hiddenDim; i++)
         {
-            hiddenBias.data[i] -= learningRate * dL_dP.data[i + hiddenBiasIndex];
+            hiddenBias.data[i] -= dL_dP.data[i + hiddenBiasIndex];
         }
     }
 
@@ -556,6 +648,108 @@ struct RNNLanguageModel
     }
 };
 
+// Helper function to serialize a Matrix
+void serializeMatrix(std::ofstream &out, const Matrix &matrix)
+{
+    out.write(reinterpret_cast<const char *>(&matrix.rows), sizeof(int));
+    out.write(reinterpret_cast<const char *>(&matrix.cols), sizeof(int));
+    out.write(reinterpret_cast<const char *>(&matrix.numValues), sizeof(int));
+    out.write(reinterpret_cast<const char *>(matrix.data), sizeof(float) * matrix.numValues);
+}
+
+// Helper function to deserialize a Matrix
+void deserializeMatrix(std::ifstream &in, Matrix &matrix)
+{
+    in.read(reinterpret_cast<char *>(&matrix.rows), sizeof(int));
+    in.read(reinterpret_cast<char *>(&matrix.cols), sizeof(int));
+    in.read(reinterpret_cast<char *>(&matrix.numValues), sizeof(int));
+
+    matrix.data = new float[matrix.numValues];
+    in.read(reinterpret_cast<char *>(matrix.data), sizeof(float) * matrix.numValues);
+}
+
+// Serialize RNNLanguageModel to a file
+void serializeRNNLanguageModel(const RNNLanguageModel &model, const std::string &filename)
+{
+    std::ofstream out(filename, std::ios::binary);
+    if (!out)
+    {
+        std::cerr << "Error: Unable to open file for writing: " << filename << std::endl;
+        return;
+    }
+
+    out.write(reinterpret_cast<const char *>(&model.vocabSize), sizeof(int));
+    out.write(reinterpret_cast<const char *>(&model.hiddenDim), sizeof(int));
+
+    serializeMatrix(out, model.embedding);
+    serializeMatrix(out, model.ih);
+    serializeMatrix(out, model.hh);
+    serializeMatrix(out, model.hiddenBias);
+
+    out.close();
+}
+
+// Deserialize RNNLanguageModel from a file
+RNNLanguageModel deserializeRNNLanguageModel(const std::string &filename)
+{
+    std::ifstream in(filename, std::ios::binary);
+    if (!in)
+    {
+        std::cerr << "Error: Unable to open file for reading: " << filename << std::endl;
+        exit(0);
+    }
+
+    int vocabSize;
+    int hiddenDim;
+
+    in.read(reinterpret_cast<char *>(&vocabSize), sizeof(int));
+    in.read(reinterpret_cast<char *>(&hiddenDim), sizeof(int));
+
+    RNNLanguageModel model = RNNLanguageModel(vocabSize, hiddenDim);
+
+    deserializeMatrix(in, model.embedding);
+    deserializeMatrix(in, model.ih);
+    deserializeMatrix(in, model.hh);
+    deserializeMatrix(in, model.hiddenBias);
+
+    in.close();
+    return model;
+}
+
+void softmax(Matrix &logits)
+{
+    // get max
+    float maxVal = -INFINITY;
+    for (int i = 0; i < logits.numValues; i++)
+    {
+        if (logits.data[i] > maxVal)
+        {
+            maxVal = logits.data[i];
+        }
+    }
+
+    // get sum and set vals
+    float sumExp = 0.0f;
+    for (int i = 0; i < logits.numValues; i++)
+    {
+        const float val = std::exp(logits.data[i] - maxVal);
+        sumExp += val;
+        logits.data[i] = val;
+    }
+
+    // divide by sum
+    const float sumExpInv = 1.0f / sumExp;
+    for (int i = 0; i < logits.numValues; i++)
+    {
+        logits.data[i] *= sumExpInv;
+    }
+}
+
+float getLoss(Matrix &probs, int token)
+{
+    return -log(probs.data[token]);
+}
+
 void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits, bool train, int stepNum)
 {
     if (train)
@@ -571,7 +765,8 @@ void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits
             model.getdYCurrent(token, state);
         }
 
-        model.getdY(); // dY_dP = dY_dPCurrent + dY_dRPrev @ delta
+        model.getdY();   // dY_dP = dY_dPCurrent + dY_dRPrev @ delta
+        softmax(logits); // logits -> probs
         model.getdL(token, logits);
         model.dL_dP.print("dL_dP");
     }
@@ -700,18 +895,24 @@ int main()
     int hiddenDim = 16;
 
     // Learning parameters
-    float learningRate = 0.1f;
+    float learningRate = 0.01f;
+    float beta1 = 0.9f;
+    float beta2 = 0.999f;
     int numEpochs = 1;
 
     // Settings
     int numTokenFiles = 74;
     std::string dataFolder = "tokenData/";
     int logInterval = 500;
+    std::string savePath = "models/embedArticleCPP/model.bin";
 
     std::cout << "Initializing..." << std::endl;
 
     // Init model
     RNNLanguageModel model = RNNLanguageModel(vocabSize, hiddenDim);
+
+    // Init optimizer
+    AdamOptimizer optimizer = AdamOptimizer(model.numParams, learningRate, beta1, beta2, 1e-5);
 
     // Init state and logits
     Matrix state = Matrix(1, hiddenDim);
@@ -740,6 +941,9 @@ int main()
         {
             dataLoader.openFile(dataFolder + std::to_string(j) + ".bin");
 
+            // Init loss
+            float loss = -1.0f;
+
             for (int k = 0; k < dataLoader.numTuples; k++)
             {
                 // Load page
@@ -753,7 +957,8 @@ int main()
 
                 std::cout << "Epoch [" << i + 1 << "/" << numEpochs << "], ";
                 std::cout << "File [" << j + 1 << "/" << numTokenFiles << "], ";
-                std::cout << "Page [" << k + 1 << "/" << dataLoader.numTuples << "]" << std::endl;
+                std::cout << "Page [" << k + 1 << "/" << dataLoader.numTuples << "], ";
+                std::cout << "Last Loss: " << loss << std::endl;
 
                 // Reset
                 state.zeros();
@@ -780,12 +985,17 @@ int main()
                 // Reset clock
                 clock.restart();
 
+                // Init loss
+                loss = 0.0f;
+
                 // Evaluate
                 std::cout << "Evaluating" << std::endl;
                 std::flush(std::cout);
                 for (int l = 0; l < page.textSize; l++)
                 {
-                    trainStep(page.text[l], model, state, logits, true, l + page.textSize);
+                    const uint8_t token = page.text[l];
+                    trainStep(token, model, state, logits, true, l + page.textSize);
+                    loss += getLoss(logits, token);
                     if (l % logInterval == 0)
                     {
                         clearLines(1);
@@ -797,8 +1007,15 @@ int main()
                 std::cout << "Evaluating [" << page.textSize << "/" << page.textSize << "], " << (int)((float)page.textSize / clock.getElapsedTime()) << " tok/sec" << std::endl;
                 std::flush(std::cout);
 
+                // Normalize loss
+                loss /= (float)page.textSize;
+
                 // Update model parameters
-                model.updateParams(learningRate);
+                optimizer.getGrads(model.dL_dP);
+                model.updateParams();
+
+                // Save model
+                serializeRNNLanguageModel(model, savePath);
 
                 // Clear text
                 clearLines(3);
