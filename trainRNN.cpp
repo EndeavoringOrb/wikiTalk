@@ -177,6 +177,7 @@ struct RNNLanguageModel
     Matrix inState;  // input state from forward
     Matrix newState; // for intermediate hidden state
 
+    // Matrices for Backpropagation Through Time
     Matrix dY_dRPrev;
     Matrix dY_dPCurrent;
     Matrix dL_dY;
@@ -184,6 +185,16 @@ struct RNNLanguageModel
     Matrix dR_dRPrev;
     Matrix dR_dPCurrent;
     Matrix delta;
+
+    // Matrices for storing pre-computed values
+    Matrix hhVal0;
+    Matrix hhVal1;
+    Matrix hhVal2;
+    Matrix hhVal3;
+
+    Matrix ihVal0;
+
+    Matrix activationGradVal;
 
     RNNLanguageModel(int _vocabSize, int _hiddenDim)
         : embedding(_vocabSize, _hiddenDim),
@@ -200,7 +211,15 @@ struct RNNLanguageModel
           dL_dP(1, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
           dR_dRPrev(_hiddenDim, _hiddenDim),
           dR_dPCurrent(_hiddenDim, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
-          delta(_hiddenDim, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim)
+          delta(_hiddenDim, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
+
+          hhVal0(1, _hiddenDim),
+          hhVal1(1, _hiddenDim),
+          hhVal2(_hiddenDim, _hiddenDim),
+          hhVal3(1, _hiddenDim),
+
+          ihVal0(1, _hiddenDim),
+          activationGradVal(1, _hiddenDim)
     {
         vocabSize = _vocabSize;
         hiddenDim = _hiddenDim;
@@ -216,6 +235,48 @@ struct RNNLanguageModel
         ih.randomize(0.0f, 0.02f, randSeed);
         hh.randomize(0.0f, 0.02f, randSeed);
         hiddenBias.randomize(0.0f, 0.02f, randSeed);
+    }
+
+    void preCompute()
+    {
+        // Reset
+        hhVal0.zeros();
+        hhVal1.zeros();
+        hhVal2.zeros();
+        hhVal3.zeros();
+        ihVal0.zeros();
+
+        // Compute
+        for (int j = 0; j < hiddenDim; j++)
+        {
+            // val0
+            const float normVal = hh.norm(j);
+            const float normVal2 = normVal * hiddenDim;
+            float stateGradVal = 0.0f;
+            for (int k = 0; k < hiddenDim; k++)
+            {
+                stateGradVal += hh.data[j * hiddenDim + k];
+            }
+            hhVal0.data[j] = stateGradVal / normVal2;
+
+            // val1
+            hhVal1.data[j] = 1.0f / normVal2;
+
+            // val2
+            const float val = stateGradVal * hiddenDim;
+            for (int k = 0; k < hiddenDim; k++)
+            {
+                hhVal2.data[j * hiddenDim + k] = val * hh.data[j * hiddenDim + k];
+            }
+
+            // val3
+            hhVal3.data[j] = 1.0f / (normVal2 * normVal2 * normVal);
+
+            for (int k = 0; k < hiddenDim; k++)
+            {
+                ihVal0.data[j] += ih.data[j * hiddenDim + k];
+            }
+        }
     }
 
     void getdR(int token, Matrix &state)
@@ -305,6 +366,15 @@ struct RNNLanguageModel
     {
         dY_dPCurrent.zeros();
         dY_dRPrev.zeros();
+
+        for (int j = 0; j < hiddenDim; j++)
+        {
+            const float x = absFloat(newState.data[j]);
+            const float term1 = x + 1.0f;
+            const float term2 = x * x + term1;
+            activationGradVal.data[j] = (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
+        }
+
         for (int i = 0; i < vocabSize; i++)
         {
             for (int j = 0; j < hiddenDim; j++)
@@ -314,31 +384,21 @@ struct RNNLanguageModel
                 dY_dPCurrent.data[i * numParams + i * hiddenDim + j] = state.data[j]; // Set embedding grad
 
                 // activation
-                const float x = absFloat(newState.data[j]);
-                const float term1 = x + 1.0f;
-                const float term2 = x * x + term1;
-                gradVal *= (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
+                gradVal *= activationGradVal.data[j];
 
                 // hiddenToHidden
-                const float normVal = hh.norm(j);
-                const float normVal2 = normVal * hiddenDim;
-                // Grad
-                float stateGradVal = 0.0f;
-                for (int k = 0; k < hiddenDim; k++)
-                {
-                    stateGradVal += hh.data[j * hiddenDim + k];
-                }
-                dY_dRPrev.data[i * hiddenDim + j] = gradVal * stateGradVal / normVal2;
+                // grad
+                dY_dRPrev.data[i * hiddenDim + j] = gradVal * hhVal0.data[j];
                 // hh weight
                 for (int k = 0; k < hiddenDim; k++)
                 {
-                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = gradVal * (inState.data[j] / normVal2 + (inState.data[j] * stateGradVal * hiddenDim * hh.data[j * hiddenDim + k]) / (normVal2 * normVal2 * normVal)); // Set hh grad
+                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = gradVal * (inState.data[j] * hhVal1.data[j] + (inState.data[j] * hhVal2.data[j * hiddenDim + k]) * hhVal3.data[j]); // Set hh grad
                 }
 
                 // inputToHidden
+                dY_dPCurrent.data[i * numParams + token * hiddenDim + j] = ihVal0.data[j]; // Accumulate grad into embedding after inputToHidden
                 for (int k = 0; k < hiddenDim; k++)
                 {
-                    dY_dPCurrent.data[i * numParams + token * hiddenDim + j] += ih.data[j * hiddenDim + k];                           // Accumulate grad into embedding after inputToHidden
                     dY_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + k] = gradVal * embedding.data[token * hiddenDim + j]; // Set ih grad
                 }
 
@@ -401,6 +461,9 @@ struct RNNLanguageModel
         dR_dRPrev.zeros();
         dR_dPCurrent.zeros();
         delta.zeros();
+
+        // Pre-Compute values
+        preCompute();
     }
 
     void forward(Matrix &state, int token)
@@ -643,20 +706,12 @@ int main()
     // Settings
     int numTokenFiles = 74;
     std::string dataFolder = "tokenData/";
-    int logInterval = 100;
+    int logInterval = 500;
 
     std::cout << "Initializing..." << std::endl;
 
     // Init model
     RNNLanguageModel model = RNNLanguageModel(vocabSize, hiddenDim);
-
-    std::cout << "Vocab Size: " << vocabSize << std::endl;
-    std::cout << "Hidden Size: " << hiddenDim << std::endl;
-    std::cout << "# Embedding Params: " << vocabSize * hiddenDim << std::endl;
-    std::cout << "# Input->Hidden Params: " << hiddenDim * hiddenDim << std::endl;
-    std::cout << "# Hidden->Hidden Params: " << hiddenDim * hiddenDim << std::endl;
-    std::cout << "# Hidden Bias Params: " << hiddenDim << std::endl;
-    std::cout << "# Total Params: " << model.numParams << std::endl;
 
     // Init state and logits
     Matrix state = Matrix(1, hiddenDim);
@@ -668,6 +723,14 @@ int main()
 
     // Init clock
     Clock clock;
+
+    std::cout << "Vocab Size: " << vocabSize << std::endl;
+    std::cout << "Hidden Size: " << hiddenDim << std::endl;
+    std::cout << "# Embedding Params: " << vocabSize * hiddenDim << std::endl;
+    std::cout << "# Input->Hidden Params: " << hiddenDim * hiddenDim << std::endl;
+    std::cout << "# Hidden->Hidden Params: " << hiddenDim * hiddenDim << std::endl;
+    std::cout << "# Hidden Bias Params: " << hiddenDim << std::endl;
+    std::cout << "# Total Params: " << model.numParams << std::endl;
 
     std::cout << "\nTraining..." << std::endl;
 
