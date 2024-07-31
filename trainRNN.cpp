@@ -6,7 +6,8 @@
 #include <chrono>
 #include <thread>
 
-constexpr bool DEBUG_PRINT = false;
+constexpr bool DEBUG_PRINT = true;
+constexpr bool CLIP_GRADS = true;
 
 constexpr float PI = 3.14159265358979323846;
 
@@ -65,16 +66,22 @@ void clearLines(int numLines)
     std::flush(std::cout);
 }
 
+float absFloat(float value)
+{
+    return value < 0.0f ? -value : value;
+}
+
 struct Matrix
 {
     float *data;
     int rows;
     int cols;
+    int numValues;
 
-    Matrix(int r, int c) : rows(r), cols(c)
+    Matrix(int r, int c) : rows(r), cols(c), numValues(r * c)
     {
         data = new float[rows * cols];
-        zero();
+        zeros();
     }
 
     ~Matrix()
@@ -82,32 +89,54 @@ struct Matrix
         delete[] data;
     }
 
-    float &operator()(int row, int col)
-    {
-        return data[row * cols + col];
-    }
-
-    const float &operator()(int row, int col) const
-    {
-        return data[row * cols + col];
-    }
-
+    // Fills the matrix data with random values sampled from a normal distribution specified by mean and std
     void randomize(float mean, float std, uint32_t &randSeed)
     {
-        for (int i = 0; i < rows * cols; ++i)
+        for (int i = 0; i < numValues; ++i)
         {
             data[i] = randDist(mean, std, randSeed);
         }
     }
 
-    void zero()
+    // Fills the matrix data with 0.0f
+    void zeros()
     {
-        for (int i = 0; i < rows * cols; ++i)
+        for (int i = 0; i < numValues; ++i)
         {
             data[i] = 0.0f;
         }
     }
 
+    // Fills the matrix data with 1.0f
+    void ones()
+    {
+        for (int i = 0; i < numValues; ++i)
+        {
+            data[i] = 1.0f;
+        }
+    }
+
+    // Gets the norm of a row in the matrix
+    float norm(int rowNum)
+    {
+        float value;
+        for (int i = rowNum * cols; i < rowNum * cols + cols; i++)
+        {
+            float x = data[i];
+            value += x * x;
+        }
+        return sqrt(value);
+    }
+
+    void copy(Matrix &other)
+    {
+        for (int i = 0; i < numValues; i++)
+        {
+            data[i] = other.data[i];
+        }
+    }
+
+    // Prints the matrix to the terminal
     void print(std::string name)
     {
         if (DEBUG_PRINT)
@@ -148,8 +177,6 @@ struct RNNLanguageModel
     Matrix inState;  // input state from forward
     Matrix newState; // for intermediate hidden state
 
-    Matrix grad;
-    Matrix stateGrad;
     Matrix dY_dRPrev;
     Matrix dY_dPCurrent;
     Matrix dL_dY;
@@ -167,8 +194,6 @@ struct RNNLanguageModel
           inState(1, _hiddenDim),
           newState(1, _hiddenDim),
 
-          grad(1, _hiddenDim),
-          stateGrad(1, _hiddenDim),
           dY_dRPrev(_vocabSize, _hiddenDim),
           dY_dPCurrent(_vocabSize, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
           dL_dY(1, _vocabSize),
@@ -193,34 +218,42 @@ struct RNNLanguageModel
         hiddenBias.randomize(0.0f, 0.02f, randSeed);
     }
 
-    void getdR(int token)
+    void getdR(int token, Matrix &state)
     {
+        dR_dPCurrent.zeros();
+        dR_dRPrev.zeros();
         for (int i = 0; i < hiddenDim; i++)
         {
+            // activation
+            const float x = absFloat(state.data[i]);
+            const float term1 = x * x + x + x + 4.0f;           // x^2 + 2x + 4
+            float gradVal = (8 * (x + 1.0f)) / (term1 * term1); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
+
+            // hiddenToHidden
+            const float normVal = hh.norm(i);
+            const float normVal2 = normVal * hiddenDim;
+            // Grad
+            float stateGradVal = 0.0f;
             for (int j = 0; j < hiddenDim; j++)
             {
-                // activation
-                grad.data[j] = (1.0f + newState.data[j]); // Set grad after activation
-
-                // hiddenToHidden
-                float stateGradVal = 0.0f; // Init grad after hiddenToHidden
-                for (int k = 0; k < hiddenDim; k++)
-                {
-                    stateGradVal += hh.data[j * hiddenDim + k];                                                      // Accumulate grad after hiddenToHidden
-                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = grad.data[j] * inState.data[k]; // Set hh grad
-                }
-                dR_dRPrev.data[i * hiddenDim + j] = grad.data[j] * stateGradVal; // Set grad after hiddenToHidden
-
-                // inputToHidden
-                for (int k = 0; k < hiddenDim; k++)
-                {
-                    dR_dPCurrent.data[i * numParams + token * hiddenDim + j] += ih.data[j * hiddenDim + k];                                // Accumulate grad into embedding after inputToHidden
-                    dR_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + k] = grad.data[j] * embedding.data[token * hiddenDim + j]; // Set ih grad
-                }
-
-                // hiddenBias
-                dY_dPCurrent.data[i * numParams + hiddenBiasIndex + j] = grad.data[j]; // Set bias grad
+                stateGradVal += hh.data[i * hiddenDim + j];
             }
+            dR_dRPrev.data[i * hiddenDim + i] = gradVal * stateGradVal / normVal2;
+            // hh weight
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                dR_dPCurrent.data[i * numParams + hhIndex + i * hiddenDim + j] = gradVal * (inState.data[i] / normVal2 + (inState.data[i] * stateGradVal * hiddenDim * hh.data[i * hiddenDim + j]) / (normVal2 * normVal2 * normVal)); // Set hh grad
+            }
+
+            // inputToHidden
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                dR_dPCurrent.data[i * numParams + token * hiddenDim + i] += ih.data[i * hiddenDim + j];                           // Accumulate grad into embedding after inputToHidden
+                dR_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + j] = gradVal * embedding.data[token * hiddenDim + j]; // Set ih grad
+            }
+
+            // hiddenBias
+            dR_dPCurrent.data[i * numParams + hiddenBiasIndex + i] = gradVal; // Set bias grad
         }
     }
 
@@ -269,45 +302,54 @@ struct RNNLanguageModel
 
     void getdYCurrent(int token, Matrix &state)
     {
-        dY_dPCurrent.zero();
+        dY_dPCurrent.zeros();
+        dY_dRPrev.zeros();
         for (int i = 0; i < vocabSize; i++)
         {
             for (int j = 0; j < hiddenDim; j++)
             {
                 // logits
-                grad.data[j] = embedding.data[i * hiddenDim + j];                     // Set grad after logits projection
+                float gradVal = embedding.data[i * hiddenDim + j];                    // Set grad after logits projection
                 dY_dPCurrent.data[i * numParams + i * hiddenDim + j] = state.data[j]; // Set embedding grad
 
                 // activation
-                const float x = abs(newState.data[j]);
+                const float x = absFloat(newState.data[j]);
                 const float term1 = x * x + x + x + 4.0f; // x^2 + 2x + 4
-                grad.data[j] *= (8 * (x + 1.0f)) / (term1 * term1);
+                gradVal *= (8 * (x + 1.0f)) / (term1 * term1);
 
                 // hiddenToHidden
-                float stateGradVal = 0.0f; // Init grad after hiddenToHidden
+                const float normVal = hh.norm(j);
+                const float normVal2 = normVal * hiddenDim;
+                // Grad
+                float stateGradVal = 0.0f;
                 for (int k = 0; k < hiddenDim; k++)
                 {
-                    stateGradVal += hh.data[j * hiddenDim + k];                                                      // Accumulate grad after hiddenToHidden
-                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = grad.data[j] * inState.data[k]; // Set hh grad
+                    stateGradVal += hh.data[j * hiddenDim + k];
                 }
-                dY_dRPrev.data[i * hiddenDim + j] = grad.data[j] * stateGradVal; // Set grad after hiddenToHidden
+                dY_dRPrev.data[i * hiddenDim + j] = gradVal * stateGradVal / normVal2;
+                // hh weight
+                for (int k = 0; k < hiddenDim; k++)
+                {
+                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = gradVal * (inState.data[j] / normVal2 + (inState.data[j] * stateGradVal * hiddenDim * hh.data[j * hiddenDim + k]) / (normVal2 * normVal2 * normVal)); // Set hh grad
+                }
 
                 // inputToHidden
                 for (int k = 0; k < hiddenDim; k++)
                 {
-                    dY_dPCurrent.data[i * numParams + token * hiddenDim + j] += ih.data[j * hiddenDim + k];                                // Accumulate grad into embedding after inputToHidden
-                    dY_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + k] = grad.data[j] * embedding.data[token * hiddenDim + j]; // Set ih grad
+                    dY_dPCurrent.data[i * numParams + token * hiddenDim + j] += ih.data[j * hiddenDim + k];                           // Accumulate grad into embedding after inputToHidden
+                    dY_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + k] = gradVal * embedding.data[token * hiddenDim + j]; // Set ih grad
                 }
 
                 // hiddenBias
-                dY_dPCurrent.data[i * numParams + hiddenBiasIndex + j] = grad.data[j]; // Set bias grad
+                dY_dPCurrent.data[i * numParams + hiddenBiasIndex + j] = gradVal; // Set bias grad
             }
         }
     }
 
     void getdYdLogits(int token, Matrix &state)
     {
-        dY_dPCurrent.zero();
+        dY_dPCurrent.zeros();
+        dY_dRPrev.zeros();
         for (int i = 0; i < vocabSize; i++)
         {
             for (int j = 0; j < hiddenDim; j++)
@@ -348,35 +390,38 @@ struct RNNLanguageModel
     void reset()
     {
         // Reset all values
-        inState.zero();
-        newState.zero();
-        grad.zero();
-        stateGrad.zero();
-        dY_dRPrev.zero();
-        dY_dPCurrent.zero();
-        dL_dY.zero();
-        dL_dP.zero();
-        dR_dRPrev.zero();
-        dR_dPCurrent.zero();
-        delta.zero();
+        inState.zeros();
+        newState.zeros();
+        dY_dRPrev.zeros();
+        dY_dPCurrent.zeros();
+        dL_dY.zeros();
+        dL_dP.zeros();
+        dR_dRPrev.zeros();
+        dR_dPCurrent.zeros();
+        delta.zeros();
     }
 
     void forward(Matrix &state, int token)
     {
-        newState.zero();
-        inputToHidden(token);
-        hiddenToHidden(state);
+        newState.zeros();      // reset newState
+        inState.copy(state);   // set inState
+        inputToHidden(token);  // do input transformation
+        hiddenToHidden(state); // do hidden transformation
+
+        // add bias to newHidden
         for (int i = 0; i < hiddenDim; i++)
         {
             newState.data[i] += hiddenBias.data[i];
         }
+
+        // apply activation function to newState
         activation(newState, state);
     }
 
     // logits = state @ embedding.T
     void getLogits(Matrix &state, Matrix &logits)
     {
-        logits.zero();
+        logits.zeros();
         for (int i = 0; i < vocabSize; i++)
         {
             for (int j = 0; j < hiddenDim; j++)
@@ -403,27 +448,44 @@ struct RNNLanguageModel
     {
         for (int i = 0; i < hiddenDim; i++)
         {
+            float rowSum = 0.0f;
             for (int j = 0; j < hiddenDim; j++)
             {
-                newState.data[i] += state.data[i] * hh.data[i * hiddenDim + j];
+                rowSum += hh.data[i * hiddenDim + j];
             }
+            // (state * rowSum) / (hh.norm(i) * hiddenDim)
+
+            // STATE DERIVATIVE
+            // d/dstate (state * rowSum) * (1 / (hh.norm(i) * hiddenDim)) + (state * rowSum) * d/dstate (1 / (hh.norm(i) * hiddenDim))
+            // rowSum / (hh.norm(i) * hiddenDim) + 0
+
+            // HH DERIVATIVE
+            // d/dhh (state * rowSum) * (1 / (hh.norm(i) * hiddenDim)) + (state * rowSum) * d/dhh (1 / (hh.norm(i) * hiddenDim))
+            // state / (hh.norm(i) * hiddenDim) + (state * rowSum * hiddenDim * hh[i, j]) / ((hh.norm(i) * hiddenDim) ** 2 * hh.norm(i))
+            newState.data[i] += (state.data[i] * rowSum) / (hh.norm(i) * hiddenDim);
         }
     }
 
-    // x = 1 + x + (x^2 / 2)
+    // Applies the activation function to the input matrix, storing the result in the output matrix
+    // f(x) = 1 + x + (x^2 / 2)
+    // out = (f(2 * in) - 1) / (f(2 * in) + 1)
     void activation(Matrix &in, Matrix &out)
     {
         for (int i = 0; i < hiddenDim; i++)
         {
-            const float x = in.data[i];
+            const float x = in.data[i]; // Get x
+
             if (x < 0.0f)
             {
-                const float absX = abs(x);
-                out.data[i] = -(1.0f + absX + absX * absX * 0.5f);
+                const float adjustedX = -x - x; // adjustedX = 2 * abs(x)
+                const float term1 = (1.0f + adjustedX + adjustedX * adjustedX * 0.5f);
+                out.data[i] = -(term1 - 1.0f) / (term1 + 1.0f);
             }
             else
             {
-                out.data[i] = 1.0f + x + x * x * 0.5f;
+                const float adjustedX = x + x; // adjustedX = 2 * abs(x)
+                const float term1 = 1.0f + adjustedX + adjustedX * adjustedX * 0.5f;
+                out.data[i] = (term1 - 1.0f) / (term1 + 1.0f);
             }
         }
     }
@@ -444,18 +506,16 @@ void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits
             model.getdYCurrent(token, state);
         }
 
-        model.dY_dPCurrent.print("dY_dPCurrent");
-        model.getdY();
-        model.dY_dPCurrent.print("dY_dP");
+        model.getdY(); // dY_dP = dY_dPCurrent + dY_dRPrev @ delta
         model.getdL(token, logits);
         model.dL_dP.print("dL_dP");
     }
 
-    state.print("state0");
     model.forward(state, token);
-    state.print("state1");
-    model.getdR(token);
-    model.getDelta();
+    model.getdR(token, state);
+    model.dR_dRPrev.print("dR_dRPrev");
+    model.getDelta(); // delta = dR_dPCurrent + dR_dRPrev @ delta
+    clearLines(7);
 }
 
 int main()
@@ -475,7 +535,7 @@ int main()
 
     for (int i = 0; i < 100; i++)
     {
-        state.zero();
+        state.zeros();
         model.reset();
         for (int j = 0; j < 10; j++)
         {
