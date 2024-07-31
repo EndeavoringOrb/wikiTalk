@@ -10,9 +10,9 @@
 #include <vector>
 #include <string>
 
-constexpr bool DEBUG_PRINT = false;
-
-constexpr float PI = 3.14159265358979323846;
+constexpr bool DEBUG_PRINT = false;          // If this is false, calling Matrix.print will not print anything
+constexpr float MAX_GRAD = 100.0f;           // This is the magnitude of what the gradient will be set to if we get -INF while getting loss (due to log(0)). This way we avoid -inf values messing up our grads/params
+constexpr float PI = 3.14159265358979323846; // Mathematical constant pi. Used when generating random points from a normal distribution (randDist)
 
 /**
  * Manipulates the input uint32_t so that the output is "random". It is not actually random: the same input will result in the same output, but given a certain input it is hard for an onlooker to predict the output without knowing the exact function.
@@ -374,32 +374,36 @@ struct RNNLanguageModel
         }
     }
 
-    void getdL(int token, Matrix &probs)
+    void getdL(const int token, Matrix &probs)
     {
         // Get dL_dY
         for (int i = 0; i < vocabSize; i++)
         {
             if (i == token)
             {
-                dL_dY.data[i] = 1.0f / probs.data[i];
+                // Derivative of the loss for the correct token
+                dL_dY.data[i] = -1.0f / probs.data[i] + 1.0f;
             }
             else
             {
-                dL_dY.data[i] = -1.0f / (1.0f - probs.data[i]);
+                // Derivative of the loss for an incorrect token
+                dL_dY.data[i] = 1.0f / (1.0f - probs.data[i]) - 1.0f;
             }
         }
+
         // softmax backward
-        float dot = 0.0f;
+        // d/dx (e^x * (1/sumExp))
+        // d/dx (e^x) * (1/sumExp) + e^x * d/dx (1/sumExp)
+        // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * d/dx (sumExp)
+        // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * e^x
+        // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
         for (int i = 0; i < vocabSize; i++)
         {
-            dot += dL_dY.data[i] * probs.data[i];
-        }
-        for (int i = 0; i < vocabSize; i++)
-        {
-            dL_dY.data[i] = probs.data[i] * (dL_dY.data[i] - dot);
+            const float x = probs.data[i]; // x = e^x / sumExp
+            dL_dY.data[i] *= x - x * x;    // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
         }
 
-        // dL_dP = dL_dY @ dY_dP
+        // dL_dP += dL_dY @ dY_dP
         for (int i = 0; i < token; i++)
         {
             for (int j = 0; j < numParams; j++)
@@ -418,7 +422,7 @@ struct RNNLanguageModel
 
         for (int j = 0; j < numParams; j++)
         {
-            dL_dP.data[j] -= dL_dY.data[token] * dY_dPCurrent.data[token * numParams + j];
+            dL_dP.data[j] += dL_dY.data[token] * dY_dPCurrent.data[token * numParams + j];
         }
     }
 
@@ -745,11 +749,27 @@ void softmax(Matrix &logits)
     }
 }
 
+// Gets the loss of a prediction given the probability of the correct token
+// x = the probability (a number: 0-1) of the token
+// loss = -ln(x) + x - 1
 float getLoss(Matrix &probs, int token)
 {
-    return -log(probs.data[token]);
+    const float x = probs.data[token];
+    float logVal = -log(x);
+    if (logVal == INFINITY)
+    {
+        return MAX_GRAD;
+    }
+    else
+    {
+        return logVal + x - 1.0f;
+    }
 }
 
+// Does one training step for a model.
+// Does the forward pass and backward pass
+// Gets the loss if bool train is true
+// Does NOT update model parameters
 void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits, bool train, int stepNum)
 {
     if (train)
@@ -888,7 +908,7 @@ int main()
     constexpr int hiddenDim = 16;
 
     // Learning parameters
-    float learningRate = 0.01f;
+    float learningRate = 0.001f;
     float beta1 = 0.9f;
     float beta2 = 0.999f;
     int numEpochs = 1;

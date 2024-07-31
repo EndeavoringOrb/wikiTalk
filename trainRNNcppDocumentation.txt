@@ -1,0 +1,8 @@
+Loss:
+Given the probability x in the range [0, 1], the function for the loss value of that token is:
+
+if it is the probability for the correct token:
+-ln(x) + x - 1
+
+if it is the probability for an incorrect token:
+-ln(1 - x) + x
