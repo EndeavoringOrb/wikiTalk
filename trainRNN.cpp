@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <stdint.h>
 #include <limits>
 #include <cmath>
@@ -6,9 +7,10 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <vector>
+#include <string>
 
-constexpr bool DEBUG_PRINT = true;
-constexpr bool CLIP_GRADS = true;
+constexpr bool DEBUG_PRINT = false;
 
 constexpr float PI = 3.14159265358979323846;
 
@@ -515,33 +517,230 @@ void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits
     model.getdR(token, state);
     model.dR_dRPrev.print("dR_dRPrev");
     model.getDelta(); // delta = dR_dPCurrent + dR_dRPrev @ delta
-    clearLines(7);
+    if (DEBUG_PRINT)
+    {
+        clearLines(7);
+    }
 }
+
+struct Page
+{
+    std::vector<uint8_t> title;
+    std::vector<uint8_t> text;
+    int titleSize;
+    int textSize;
+};
+
+struct DataLoader
+{
+    std::ifstream file;
+    bool fileOpen = false;
+    uint32_t numTuples;
+    uint32_t currentTuple = 0;
+
+    DataLoader(const std::string &filename) : file(filename, std::ios::binary)
+    {
+        if (!file)
+        {
+            throw std::runtime_error("Unable to open file");
+        }
+        file.read(reinterpret_cast<char *>(&numTuples), sizeof(numTuples));
+        fileOpen = true;
+    }
+
+    ~DataLoader()
+    {
+        if (fileOpen)
+        {
+            file.close();
+        }
+    }
+
+    void readHeader()
+    {
+        if (!file)
+        {
+            throw std::runtime_error("No file is open");
+        }
+        file.read(reinterpret_cast<char *>(&numTuples), sizeof(numTuples));
+        currentTuple = 0;
+    }
+
+    void openFile(const std::string &filename)
+    {
+        if (fileOpen)
+        {
+            file.close();
+        }
+        file.open(filename, std::ios::binary);
+        readHeader();
+    }
+
+    bool nextPage(Page &page)
+    {
+        // If there are no more pages, return false
+        if (currentTuple >= numTuples)
+        {
+            return false;
+        }
+
+        // Read the length of the title and page
+        uint32_t len1, len2;
+        file.read(reinterpret_cast<char *>(&len1), sizeof(len1));
+        file.read(reinterpret_cast<char *>(&len2), sizeof(len2));
+
+        // Set page title and text sizes
+        page.titleSize = len1;
+        page.textSize = len2;
+
+        // Make sure the title and text vectors have enough room for the data
+        if (page.title.size() < len1)
+        {
+            page.title.resize(len1);
+        }
+        if (page.text.size() < len2)
+        {
+            page.text.resize(len2);
+        }
+
+        // Read the data for the title and page
+        file.read(reinterpret_cast<char *>(page.title.data()), len1);
+        file.read(reinterpret_cast<char *>(page.text.data()), len2);
+
+        return true; // We were able to load a page
+    }
+};
+
+struct Clock
+{
+    std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
+
+    Clock() : startTime(std::chrono::high_resolution_clock::now()) {}
+
+    double getElapsedTime() const
+    {
+        auto current_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = current_time - startTime;
+        return elapsed.count();
+    }
+
+    void restart()
+    {
+        startTime = std::chrono::high_resolution_clock::now();
+    }
+};
 
 int main()
 {
-    int vocabSize = 4;
-    int hiddenDim = 2;
+    // Model parameters
+    int vocabSize = 95;
+    int hiddenDim = 16;
+
+    // Learning parameters
     float learningRate = 0.1f;
+    int numEpochs = 1;
+
+    // Settings
+    int numTokenFiles = 74;
+    std::string dataFolder = "tokenData/";
+    int logInterval = 100;
 
     std::cout << "Initializing..." << std::endl;
+
+    // Init model
     RNNLanguageModel model = RNNLanguageModel(vocabSize, hiddenDim);
 
+    std::cout << "Vocab Size: " << vocabSize << std::endl;
+    std::cout << "Hidden Size: " << hiddenDim << std::endl;
+    std::cout << "# Embedding Params: " << vocabSize * hiddenDim << std::endl;
+    std::cout << "# Input->Hidden Params: " << hiddenDim * hiddenDim << std::endl;
+    std::cout << "# Hidden->Hidden Params: " << hiddenDim * hiddenDim << std::endl;
+    std::cout << "# Hidden Bias Params: " << hiddenDim << std::endl;
+    std::cout << "# Total Params: " << model.numParams << std::endl;
+
+    // Init state and logits
     Matrix state = Matrix(1, hiddenDim);
     Matrix logits = Matrix(1, vocabSize);
 
-    std::cout << "Training..." << std::endl;
+    // Init dataloader
+    DataLoader dataLoader = DataLoader(dataFolder + "0.bin");
+    Page page;
 
-    for (int i = 0; i < 100; i++)
+    // Init clock
+    Clock clock;
+
+    std::cout << "\nTraining..." << std::endl;
+
+    for (int i = 0; i < numEpochs; i++)
     {
-        state.zeros();
-        model.reset();
-        for (int j = 0; j < 10; j++)
+        for (int j = 0; j < numTokenFiles; j++)
         {
-            trainStep(0, model, state, logits, true, j);
-        }
+            dataLoader.openFile(dataFolder + std::to_string(j) + ".bin");
 
-        model.updateParams(learningRate);
+            for (int k = 0; k < dataLoader.numTuples; k++)
+            {
+                // Load page
+                bool loadedPage = dataLoader.nextPage(page);
+
+                if (!loadedPage)
+                {
+                    std::cout << "Failed to load page #" << k + 1 << " in file #" << j << "." << std::endl;
+                    continue;
+                }
+
+                std::cout << "Epoch [" << i + 1 << "/" << numEpochs << "], ";
+                std::cout << "File [" << j + 1 << "/" << numTokenFiles << "], ";
+                std::cout << "Page [" << k + 1 << "/" << dataLoader.numTuples << "]" << std::endl;
+
+                // Reset
+                state.zeros();
+                model.reset();
+                clock.restart();
+
+                // Get embedding
+                std::cout << "Embedding" << std::endl;
+                std::flush(std::cout);
+                for (int l = 0; l < page.textSize; l++)
+                {
+                    trainStep(page.text[l], model, state, logits, false, l);
+                    if (l % logInterval == 0)
+                    {
+                        clearLines(1);
+                        std::cout << "Embedding [" << l + 1 << "/" << page.textSize << "], " << (int)((float)l / clock.getElapsedTime()) << " tok/sec" << std::endl;
+                        std::flush(std::cout);
+                    }
+                }
+                clearLines(1);
+                std::cout << "Embedding [" << page.textSize << "/" << page.textSize << "], " << (int)((float)page.textSize / clock.getElapsedTime()) << " tok/sec" << std::endl;
+                std::flush(std::cout);
+
+                // Reset clock
+                clock.restart();
+
+                // Evaluate
+                std::cout << "Evaluating" << std::endl;
+                std::flush(std::cout);
+                for (int l = 0; l < page.textSize; l++)
+                {
+                    trainStep(page.text[l], model, state, logits, true, l + page.textSize);
+                    if (l % logInterval == 0)
+                    {
+                        clearLines(1);
+                        std::cout << "Evaluating [" << l + 1 << "/" << page.textSize << "], " << (int)((float)l / clock.getElapsedTime()) << " tok/sec" << std::endl;
+                        std::flush(std::cout);
+                    }
+                }
+                clearLines(1);
+                std::cout << "Evaluating [" << page.textSize << "/" << page.textSize << "], " << (int)((float)page.textSize / clock.getElapsedTime()) << " tok/sec" << std::endl;
+                std::flush(std::cout);
+
+                // Update model parameters
+                model.updateParams(learningRate);
+
+                // Clear text
+                clearLines(3);
+            }
+        }
     }
 
     return 0;
