@@ -2,15 +2,21 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+
 # Define the RNN model
 class RNNLanguage(nn.Module):
     def __init__(self, vocabSize, hiddenDim):
         super(RNNLanguage, self).__init__()
-        embeddingData = torch.normal(0, 0.02, (vocabSize, hiddenDim))
-        self.embedding = nn.Parameter(embeddingData)
+        data = torch.normal(0, 0.02, (vocabSize, hiddenDim))
+        self.embedding = nn.Parameter(data)
 
-        self.ih = nn.Linear(hiddenDim, hiddenDim)
-        self.hh = nn.Linear(hiddenDim, hiddenDim)
+        data = torch.normal(0, 0.02, (hiddenDim, hiddenDim))
+        self.ih = nn.Parameter(data)
+        data = torch.normal(0, 0.02, (hiddenDim, hiddenDim))
+        self.hh = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (hiddenDim,))
+        self.bias = nn.Parameter(data)
 
         self.activation = nn.Tanh()
 
@@ -19,23 +25,26 @@ class RNNLanguage(nn.Module):
 
     def forward(self, state, x):
         embedded = self.embedding[x]
-        newState = self.activation(self.ih(embedded) + self.hh(state))
+        newState = self.activation(embedded @ self.ih + state @ (self.hh / (torch.norm(self.hh, dim=1) * self.hiddenDim)) + self.bias)
+        
         return newState
-    
+
     def preprocess(self, x):
         state = torch.zeros(self.hiddenDim)
         for token in x:
             state = self.forward(state, token)
         return state
-    
+
     def sample(self, state):
         logits = self.logits(state)
         probs = F.softmax(logits, dim=0)
         token = torch.multinomial(probs, 1)
         return token
-    
+
     def logits(self, state):
-        return state @ self.embedding.T # we re-use the embedding matrix to save on param count
+        return (
+            state @ self.embedding.T
+        )  # we re-use the embedding matrix to save on param count
 
 
 # Define the RNN model
@@ -61,7 +70,7 @@ class RNNEmbedder(nn.Module):
         for embedding in embedded:
             hiddenState = self.activation(self.ih(embedding) + self.hh(hiddenState))
         return self.fc(hiddenState)
-    
+
     @torch.no_grad()
     def getSimilarity(self, query, title):
         # Get embeddings

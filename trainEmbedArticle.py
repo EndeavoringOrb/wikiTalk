@@ -55,9 +55,10 @@ if __name__ == "__main__":
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     print(f"Hidden Dim: {hidden_dim:,}")
     print(f"# Embedding Params: {vocab_size * hidden_dim:,}")
-    print(f"# Input->Hidden Params: {hidden_dim * hidden_dim + hidden_dim:,}")
-    print(f"# Hidden->Hidden Params: {hidden_dim * hidden_dim + hidden_dim:,}")
-    print(f"Total # Params: {vocab_size * hidden_dim + 2 * (hidden_dim * hidden_dim + hidden_dim):,}")
+    print(f"# Input->Hidden Params: {hidden_dim * hidden_dim:,}")
+    print(f"# Hidden->Hidden Params: {hidden_dim * hidden_dim:,}")
+    print(f"# Hidden Bias Params: {hidden_dim * hidden_dim:,}")
+    print(f"Total # Params: {vocab_size * hidden_dim + 2 * hidden_dim * hidden_dim + hidden_dim:,}")
 
 
     # Training loop

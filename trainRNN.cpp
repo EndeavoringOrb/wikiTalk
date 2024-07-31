@@ -381,11 +381,11 @@ struct RNNLanguageModel
         {
             if (i == token)
             {
-                dL_dY.data[i] = -1.0f / probs.data[i];
+                dL_dY.data[i] = 1.0f / probs.data[i];
             }
             else
             {
-                dL_dY.data[i] = 1.0f / (1.0f - probs.data[i]);
+                dL_dY.data[i] = -1.0f / (1.0f - probs.data[i]);
             }
         }
         // softmax backward
@@ -755,7 +755,6 @@ void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits
     if (train)
     {
         model.getLogits(state, logits);
-        logits.print("logits");
         if (stepNum == 0)
         {
             model.getdYdLogits(token, state); // if this is the first step, only the embedding matrix has been used so we only calculate grad for the embedding matrix
@@ -768,17 +767,11 @@ void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits
         model.getdY();   // dY_dP = dY_dPCurrent + dY_dRPrev @ delta
         softmax(logits); // logits -> probs
         model.getdL(token, logits);
-        model.dL_dP.print("dL_dP");
     }
 
     model.forward(state, token);
     model.getdR(token, state);
-    model.dR_dRPrev.print("dR_dRPrev");
     model.getDelta(); // delta = dR_dPCurrent + dR_dRPrev @ delta
-    if (DEBUG_PRINT)
-    {
-        clearLines(7);
-    }
 }
 
 struct Page
@@ -891,8 +884,8 @@ struct Clock
 int main()
 {
     // Model parameters
-    int vocabSize = 95;
-    int hiddenDim = 16;
+    constexpr int vocabSize = 95;
+    constexpr int hiddenDim = 16;
 
     // Learning parameters
     float learningRate = 0.01f;
@@ -903,7 +896,7 @@ int main()
     // Settings
     int numTokenFiles = 74;
     std::string dataFolder = "tokenData/";
-    int logInterval = 500;
+    int logInterval = 1000;
     std::string savePath = "models/embedArticleCPP/model.bin";
 
     std::cout << "Initializing..." << std::endl;
@@ -1011,7 +1004,9 @@ int main()
                 loss /= (float)page.textSize;
 
                 // Update model parameters
+                model.dL_dP.print("dL_dP");
                 optimizer.getGrads(model.dL_dP);
+                model.dL_dP.print("dL_dP2");
                 model.updateParams();
 
                 // Save model
