@@ -148,8 +148,9 @@ int main()
         {
             dataLoader.openFile(dataFolder + std::to_string(j) + ".bin");
 
-            // Init loss
+            // Init trackers
             float loss = -1.0f;
+            float gradNorm = -1.0f;
 
             for (int k = 0; k < dataLoader.numTuples; k++)
             {
@@ -165,7 +166,8 @@ int main()
                 std::cout << "Epoch [" << i + 1 << "/" << numEpochs << "], ";
                 std::cout << "File [" << j + 1 << "/" << numTokenFiles << "], ";
                 std::cout << "Page [" << k + 1 << "/" << dataLoader.numTuples << "], ";
-                std::cout << "Last Loss: " << loss << std::endl;
+                std::cout << "Last Loss: " << loss << ", ";
+                std::cout << "Last Grad Norm: " << gradNorm << std::endl;
 
                 // Reset
                 state.zeros();
@@ -214,12 +216,13 @@ int main()
                 std::cout << "Evaluating [" << page.textSize << "/" << page.textSize << "], " << (int)((float)page.textSize / clock.getElapsedTime()) << " tok/sec" << std::endl;
                 std::flush(std::cout);
 
-                // Normalize loss
-                loss /= (float)page.textSize;
-
                 // Update model parameters
                 optimizer.getGrads(model.dL_dP);
                 model.updateParams();
+
+                // Update trackers
+                loss /= (float)page.textSize;
+                gradNorm = model.dL_dP.norm();
 
                 // Save model
                 serializeRNNLanguageModel(model, savePath);

@@ -121,10 +121,22 @@ struct Matrix
         }
     }
 
+    // Gets the norm of the matrix
+    float norm()
+    {
+        float value = 0.0f;
+        for (int i = 0; i < numValues; i++)
+        {
+            float x = data[i];
+            value += x * x;
+        }
+        return sqrt(value);
+    }
+
     // Gets the norm of a row in the matrix
     float norm(int rowNum)
     {
-        float value;
+        float value = 0.0f;
         for (int i = rowNum * cols; i < rowNum * cols + cols; i++)
         {
             float x = data[i];
