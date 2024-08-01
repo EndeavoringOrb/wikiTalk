@@ -207,6 +207,8 @@ struct RNNLanguageModel
 
     Matrix activationGradVal;
 
+    Matrix hhVal4;
+
     RNNLanguageModel(int _vocabSize, int _hiddenDim)
         : embedding(_vocabSize, _hiddenDim),
           ih(_hiddenDim, _hiddenDim),
@@ -230,7 +232,10 @@ struct RNNLanguageModel
           hhVal3(1, _hiddenDim),
 
           ihVal0(1, _hiddenDim),
-          activationGradVal(1, _hiddenDim)
+
+          activationGradVal(1, _hiddenDim),
+
+          hhVal4(_hiddenDim, _hiddenDim)
     {
         vocabSize = _vocabSize;
         hiddenDim = _hiddenDim;
@@ -335,50 +340,35 @@ struct RNNLanguageModel
         // Get dL_dY
         for (int i = 0; i < vocabSize; i++)
         {
+            const float x = probs.data[i]; // x = e^x / sumExp
+
             if (i == token)
             {
                 // Derivative of the loss for the correct token
-                dL_dY.data[i] = -1.0f / probs.data[i] + 1.0f;
+                dL_dY.data[i] = -1.0f / x + 1.0f;
             }
             else
             {
                 // Derivative of the loss for an incorrect token
-                dL_dY.data[i] = 1.0f / (1.0f - probs.data[i]) - 1.0f;
+                dL_dY.data[i] = 1.0f / (1.0f - x) - 1.0f;
             }
-        }
 
-        // softmax backward
-        // d/dx (e^x * (1/sumExp))
-        // d/dx (e^x) * (1/sumExp) + e^x * d/dx (1/sumExp)
-        // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * d/dx (sumExp)
-        // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * e^x
-        // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
-        for (int i = 0; i < vocabSize; i++)
-        {
-            const float x = probs.data[i]; // x = e^x / sumExp
-            dL_dY.data[i] *= x - x * x;    // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
+            // softmax backward
+            // d/dx (e^x * (1/sumExp))
+            // d/dx (e^x) * (1/sumExp) + e^x * d/dx (1/sumExp)
+            // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * d/dx (sumExp)
+            // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * e^x
+            // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
+            dL_dY.data[i] *= x - x * x; // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
         }
 
         // dL_dP += dL_dY @ dY_dP
-        for (int i = 0; i < token; i++)
+        for (int i = 0; i < vocabSize; i++)
         {
             for (int j = 0; j < numParams; j++)
             {
                 dL_dP.data[j] += dL_dY.data[i] * dY_dPCurrent.data[i * numParams + j];
             }
-        }
-
-        for (int i = token + 1; i < vocabSize; i++)
-        {
-            for (int j = 0; j < numParams; j++)
-            {
-                dL_dP.data[j] += dL_dY.data[i] * dY_dPCurrent.data[i * numParams + j];
-            }
-        }
-
-        for (int j = 0; j < numParams; j++)
-        {
-            dL_dP.data[j] += dL_dY.data[token] * dY_dPCurrent.data[token * numParams + j];
         }
     }
 
@@ -427,6 +417,16 @@ struct RNNLanguageModel
             activationGradVal.data[j] = (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
         }
 
+        for (int j = 0; j < hiddenDim; j++)
+        {
+            const float term1 = inState.data[j] * hhVal1.data[j];
+            const float term2 = inState.data[j] * hhVal3.data[j];
+            for (int k = 0; k < hiddenDim; k++)
+            {
+                hhVal4.data[j * hiddenDim + k] = term1 + term2 * hhVal2.data[j * hiddenDim + k];
+            }
+        }
+
         for (int i = 0; i < vocabSize; i++)
         {
             for (int j = 0; j < hiddenDim; j++)
@@ -438,21 +438,20 @@ struct RNNLanguageModel
                 // activation
                 gradVal *= activationGradVal.data[j];
 
-                // hiddenToHidden
-                // grad
+                // grad through hiddenToHidden
                 dY_dRPrev.data[i * hiddenDim + j] = gradVal * hhVal0.data[j];
-                // hh weight
+
                 for (int k = 0; k < hiddenDim; k++)
                 {
-                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = gradVal * (inState.data[j] * hhVal1.data[j] + (inState.data[j] * hhVal2.data[j * hiddenDim + k]) * hhVal3.data[j]); // Set hh grad
+                    // hh weight
+                    dY_dPCurrent.data[i * numParams + hhIndex + j * hiddenDim + k] = gradVal * hhVal4.data[j * hiddenDim + k]; // Set hh grad
+
+                    // inputToHidden
+                    dY_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + k] = gradVal * embedding.data[token * hiddenDim + j]; // Set ih grad
                 }
 
                 // inputToHidden
                 dY_dPCurrent.data[i * numParams + token * hiddenDim + j] = ihVal0.data[j]; // Accumulate grad into embedding after inputToHidden
-                for (int k = 0; k < hiddenDim; k++)
-                {
-                    dY_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + k] = gradVal * embedding.data[token * hiddenDim + j]; // Set ih grad
-                }
 
                 // hiddenBias
                 dY_dPCurrent.data[i * numParams + hiddenBiasIndex + j] = gradVal; // Set bias grad
@@ -565,21 +564,7 @@ struct RNNLanguageModel
     {
         for (int i = 0; i < hiddenDim; i++)
         {
-            float rowSum = 0.0f;
-            for (int j = 0; j < hiddenDim; j++)
-            {
-                rowSum += hh.data[i * hiddenDim + j];
-            }
-            // (state * rowSum) / (hh.norm(i) * hiddenDim)
-
-            // STATE DERIVATIVE
-            // d/dstate (state * rowSum) * (1 / (hh.norm(i) * hiddenDim)) + (state * rowSum) * d/dstate (1 / (hh.norm(i) * hiddenDim))
-            // rowSum / (hh.norm(i) * hiddenDim) + 0
-
-            // HH DERIVATIVE
-            // d/dhh (state * rowSum) * (1 / (hh.norm(i) * hiddenDim)) + (state * rowSum) * d/dhh (1 / (hh.norm(i) * hiddenDim))
-            // state / (hh.norm(i) * hiddenDim) + (state * rowSum * hiddenDim * hh[i, j]) / ((hh.norm(i) * hiddenDim) ** 2 * hh.norm(i))
-            newState.data[i] += (state.data[i] * rowSum) / (hh.norm(i) * hiddenDim);
+            newState.data[i] += state.data[i] * hhVal0.data[i];
         }
     }
 
@@ -591,19 +576,9 @@ struct RNNLanguageModel
         for (int i = 0; i < hiddenDim; i++)
         {
             const float x = in.data[i]; // Get x
-
-            if (x < 0.0f)
-            {
-                const float adjustedX = -x - x; // adjustedX = 2 * abs(x)
-                const float term1 = (1.0f + adjustedX + adjustedX * adjustedX * 0.5f);
-                out.data[i] = -(term1 - 1.0f) / (term1 + 1.0f);
-            }
-            else
-            {
-                const float adjustedX = x + x; // adjustedX = 2 * abs(x)
-                const float term1 = 1.0f + adjustedX + adjustedX * adjustedX * 0.5f;
-                out.data[i] = (term1 - 1.0f) / (term1 + 1.0f);
-            }
+            const float adjustedX = 2 * fabsf(x);
+            const float term1 = (1.0f + adjustedX + adjustedX * adjustedX * 0.5f);
+            out.data[i] = copysignf((term1 - 1.0f) / (term1 + 1.0f), x);
         }
     }
 };

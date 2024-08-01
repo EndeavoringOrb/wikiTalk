@@ -151,6 +151,7 @@ int main()
             // Init trackers
             float loss = -1.0f;
             float gradNorm = -1.0f;
+            int tokensPerSecond = -1.0f;
 
             for (int k = 0; k < dataLoader.numTuples; k++)
             {
@@ -166,6 +167,7 @@ int main()
                 std::cout << "Epoch [" << i + 1 << "/" << numEpochs << "], ";
                 std::cout << "File [" << j + 1 << "/" << numTokenFiles << "], ";
                 std::cout << "Page [" << k + 1 << "/" << dataLoader.numTuples << "], ";
+                std::cout << "Last Avg. Tok/Sec: " << tokensPerSecond << ", ";
                 std::cout << "Last Loss: " << loss << ", ";
                 std::cout << "Last Grad Norm: " << gradNorm << std::endl;
 
@@ -192,6 +194,7 @@ int main()
                 std::flush(std::cout);
 
                 // Reset clock
+                const float timeElapsed = clock.getElapsedTime();
                 clock.restart();
 
                 // Init loss
@@ -223,6 +226,7 @@ int main()
                 // Update trackers
                 loss /= (float)page.textSize;
                 gradNorm = model.dL_dP.norm();
+                tokensPerSecond = (int)((float)page.textSize / (clock.getElapsedTime() + timeElapsed));
 
                 // Save model
                 serializeRNNLanguageModel(model, savePath);
