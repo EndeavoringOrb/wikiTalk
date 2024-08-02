@@ -131,13 +131,13 @@ struct Matrix
     // Fills the matrix data with 0.0f
     void zeros()
     {
-        cudaMemset(data, 0, numValues);
+        cudaMemset(data, 0, numValues * sizeof(float));
     }
 
     // Fills the matrix data with 1.0f
     void ones()
     {
-        cudaMemset(data, 1, numValues);
+        cudaMemset(data, 1, numValues * sizeof(float));
     }
 
     // Gets the norm of the matrix
@@ -162,8 +162,10 @@ struct Matrix
     }
 
     // Prints the matrix to the terminal
-    void print(std::string name)
+    void print(std::string name, int rowNum = -1)
     {
+        // Ensure kernels have finished executing
+        cudaDeviceSynchronize();
         std::cout << std::fixed << std::setprecision(2);
         std::cout << name << ": (" << rows << ", " << cols << ")" << std::endl;
         float *tempValues = new float[numValues];
@@ -172,6 +174,10 @@ struct Matrix
 
         for (int i = 0; i < rows; i++)
         {
+            if (rowNum != -1 && rowNum != i)
+            {
+                continue;
+            }
             for (int j = 0; j < cols; j++)
             {
                 if (j > 0)
@@ -184,6 +190,29 @@ struct Matrix
         }
 
         delete[] tempValues;
+    }
+
+    // Checks if any values are nan
+    int hasNan()
+    {
+        // Ensure kernels have finished executing
+        cudaDeviceSynchronize();
+        float *tempValues = new float[numValues];
+
+        cudaMemcpy(tempValues, data, numValues * sizeof(float), cudaMemcpyDeviceToHost);
+
+        for (int i = 0; i < numValues; i++)
+        {
+            bool foundNan = std::isnan(tempValues[i]);
+            if (foundNan)
+            {
+                delete[] tempValues;
+                return i;
+            }
+        }
+
+        delete[] tempValues;
+        return -1;
     }
 };
 
@@ -230,7 +259,7 @@ __global__ void preComputeKernel(float *hhVal0, float *hhVal1, float *hhVal2, fl
 __global__ void getdRKernel(int token, float *dR_dPCurrent, float *dR_dRPrev,
                             const float *activationGradVal, const float *hhVal0,
                             const float *hhVal1, const float *hhVal2, const float *hhVal3,
-                            const float *inState, const float *ih, const float *embedding,
+                            const float *inState, const float *ihVal0, const float *embedding,
                             int hiddenDim, int numParams, int hhIndex, int ihIndex,
                             int hiddenBiasIndex)
 {
@@ -240,7 +269,7 @@ __global__ void getdRKernel(int token, float *dR_dPCurrent, float *dR_dRPrev,
     if (i < hiddenDim && j < hiddenDim)
     {
         // activation
-        float gradVal = activationGradVal[i];
+        const float gradVal = activationGradVal[i];
 
         // hiddenToHidden
         // Grad
@@ -249,17 +278,19 @@ __global__ void getdRKernel(int token, float *dR_dPCurrent, float *dR_dRPrev,
             dR_dRPrev[i * hiddenDim + i] = gradVal * hhVal0[i];
         }
 
+        // embedding grad
+        dR_dPCurrent[i * numParams + token * hiddenDim + j] = gradVal * ihVal0[j];
+
         // hh weight
         dR_dPCurrent[i * numParams + hhIndex + i * hiddenDim + j] =
-            gradVal * (inState[i] * hhVal1[i] + (inState[i] * hhVal2[i * hiddenDim + j]) * hhVal3[i]);
+            gradVal * (inState[i] * hhVal1[i] + inState[i] * hhVal3[i] * hhVal2[i * hiddenDim + j]);
 
         // inputToHidden
-        atomicAdd(&dR_dPCurrent[i * numParams + token * hiddenDim + i], ih[i * hiddenDim + j]);
         dR_dPCurrent[i * numParams + ihIndex + j * hiddenDim + j] = gradVal * embedding[token * hiddenDim + j];
 
-        // hiddenBias
         if (j == 0)
         {
+            // hiddenBias
             dR_dPCurrent[i * numParams + hiddenBiasIndex + i] = gradVal;
         }
     }
@@ -308,8 +339,8 @@ __global__ void computeHHVal4Kernel(float *hhVal4, const float *inState, const f
     int k = blockIdx.y * blockDim.y + threadIdx.y;
     if (j < hiddenDim && k < hiddenDim)
     {
-        float term1 = inState[j] * hhVal1[j];
-        float term2 = inState[j] * hhVal3[j];
+        const float term1 = inState[j] * hhVal1[j];
+        const float term2 = inState[j] * hhVal3[j];
         hhVal4[j * hiddenDim + k] = term1 + term2 * hhVal2[j * hiddenDim + k];
     }
 }
@@ -366,15 +397,6 @@ __global__ void getdYdLogitsKernel(int token, float *state, float *dY_dPCurrent,
     }
 }
 
-__global__ void vecMulKernel(const float *a, const float *b, float *c, int n)
-{
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (index < n)
-    {
-        c[index] = a[index] * b[index];
-    }
-}
-
 __global__ void activationKernel(const float *in, float *out, int size)
 {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -386,6 +408,15 @@ __global__ void activationKernel(const float *in, float *out, int size)
 
         // Use conditional expression to select between positive and negative branches
         out[index] = copysignf((term1 - 1.0f) / (term1 + 1.0f), x);
+    }
+}
+
+__global__ void vecMul(float *a, float *b, float *result, int size)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size)
+    {
+        result[idx] = a[idx] * b[idx];
     }
 }
 
@@ -424,9 +455,9 @@ struct RNNLanguageModel
 
     Matrix ihVal0;
 
-    Matrix activationGradVal;
+    Matrix activationGradVal; // (1, hiddenDim), Used
 
-    Matrix hhVal4;
+    Matrix hhVal4; // (hiddenDim, hiddenDim), Used as a temp vector in getdY_dCurrent and hiddenToHidden
 
     RNNLanguageModel(int _vocabSize, int _hiddenDim)
         : embedding(_vocabSize, _hiddenDim),
@@ -493,13 +524,21 @@ struct RNNLanguageModel
 
     void getdR(int token)
     {
-        dim3 blockSize(32, 32); // Adjust based on your GPU's capabilities
-        dim3 gridSize((hiddenDim + blockSize.x - 1) / blockSize.x,
-                      (hiddenDim + blockSize.y - 1) / blockSize.y);
+        dR_dPCurrent.zeros();
+
+        int size = std::min(hiddenDim, 32);
+        dim3 blockSize(size, size); // Adjust based on your GPU's capabilities
+        dim3 gridSize((hiddenDim + size - 1) / size,
+                      (hiddenDim + size - 1) / size);
+
+        // Launch Kernel 1
+        dim3 block1(std::min(hiddenDim, MAX_THREADS_PER_BLOCK));
+        dim3 grid1((hiddenDim + block1.x - 1) / block1.x);
+        computeActivationGradsKernel<<<grid1, block1>>>(activationGradVal.data, newState.data, hiddenDim);
 
         getdRKernel<<<gridSize, blockSize>>>(token, dR_dPCurrent.data, dR_dRPrev.data,
                                              activationGradVal.data, hhVal0.data, hhVal1.data, hhVal2.data, hhVal3.data,
-                                             inState.data, ih.data, embedding.data,
+                                             inState.data, ihVal0.data, embedding.data,
                                              hiddenDim, numParams, hhIndex, ihIndex, hiddenBiasIndex);
     }
 
@@ -519,19 +558,16 @@ struct RNNLanguageModel
         }
 
         // dL_dP += dL_dY @ dY_dP
-        int M = 1;
-        int K = vocabSize;
-        int N = numParams;
+        const float alpha = 1.0f;
+        const float beta = 1.0f;
 
-        float alpha = 1.0f;
-        float beta = 1.0f;
-        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
-                    N, M, K,
+        cublasSgemv(handle, CUBLAS_OP_N,
+                    numParams, vocabSize,
                     &alpha,
-                    dY_dPCurrent.data, N,
-                    dL_dY.data, K,
+                    dY_dPCurrent.data, numParams,
+                    dL_dY.data, 1,
                     &beta,
-                    dL_dP.data, N);
+                    dL_dP.data, 1);
     }
 
     void getDelta(cublasHandle_t &handle)
@@ -575,20 +611,21 @@ struct RNNLanguageModel
 
     void getdYCurrent(int token, Matrix &state)
     {
-        // Assuming all data is already on the GPU
+        dY_dPCurrent.zeros();
 
         // Launch Kernel 1
-        dim3 block1(MAX_THREADS_PER_BLOCK);
+        dim3 block1(std::min(hiddenDim, MAX_THREADS_PER_BLOCK));
         dim3 grid1((hiddenDim + block1.x - 1) / block1.x);
         computeActivationGradsKernel<<<grid1, block1>>>(activationGradVal.data, newState.data, hiddenDim);
 
         // Launch Kernel 2
-        dim3 block2(16, 16); // Adjust these values as needed
+        int size = std::min(hiddenDim, 32);
+        dim3 block2(size, size); // Adjust these values as needed
         dim3 grid2((hiddenDim + block2.x - 1) / block2.x, (hiddenDim + block2.y - 1) / block2.y);
         computeHHVal4Kernel<<<grid2, block2>>>(hhVal4.data, inState.data, hhVal1.data, hhVal2.data, hhVal3.data, hiddenDim);
 
         // Launch Main Kernel
-        dim3 block3(min(hiddenDim, MAX_THREADS_PER_BLOCK), 1);
+        dim3 block3(std::min(hiddenDim, MAX_THREADS_PER_BLOCK), 1);
         dim3 grid3(vocabSize, (hiddenDim + block3.x - 1) / block3.x, hiddenDim);
         getdYCurrentKernel<<<grid3, block3>>>(token, state.data, dY_dPCurrent.data, dY_dRPrev.data, embedding.data,
                                               activationGradVal.data, hhVal0.data, hhVal4.data, ihVal0.data,
@@ -642,9 +679,9 @@ struct RNNLanguageModel
 
     void forward(Matrix &state, int token, cublasHandle_t &handle)
     {
-        inState.copy(state);          // set inState
-        inputToHidden(token, handle); // do input transformation
-        hiddenToHidden(state);        // do hidden transformation
+        inState.copy(state);           // set inState
+        inputToHidden(token, handle);  // do input transformation
+        hiddenToHidden(state, handle); // do hidden transformation
 
         // add bias to newHidden
         const float alpha = 1.0f;
@@ -654,13 +691,13 @@ struct RNNLanguageModel
         activation(newState, state);
     }
 
-    // logits = state @ embedding.T
+    // logits = embedding @ state
     void getLogits(Matrix &state, Matrix &logits, cublasHandle_t &handle)
     {
         const float alpha = 1.0f;
         const float beta = 0.0f;
 
-        cublasSgemv(handle, CUBLAS_OP_T,
+        cublasSgemv(handle, CUBLAS_OP_N,
                     hiddenDim, vocabSize,
                     &alpha,
                     embedding.data, hiddenDim,
@@ -669,7 +706,7 @@ struct RNNLanguageModel
                     logits.data, 1);
     }
 
-    // newState = embedding[token] @ ih
+    // newState = ih @ embedding[token]
     void inputToHidden(int token, cublasHandle_t &handle)
     {
         const float alpha = 1.0f;
@@ -684,15 +721,26 @@ struct RNNLanguageModel
                     newState.data, 1);
     }
 
-    // newState += state @ hh
-    void hiddenToHidden(Matrix &state)
+    // newState += hh @ state
+    void hiddenToHidden(Matrix &state, cublasHandle_t &handle)
     {
-        // Define the number of threads per block and number of blocks
-        int threadsPerBlock = std::min(MAX_THREADS_PER_BLOCK, hiddenDim);
-        int blocksPerGrid = (hiddenDim + threadsPerBlock - 1) / threadsPerBlock;
+        // Perform element-wise multiplication of state and hhVal1
+        // temp (hhVal4) = state * hhval1
+        int blockSize = std::min(hiddenDim, 256);
+        int numBlocks = (hiddenDim + blockSize - 1) / blockSize;
+        vecMul<<<numBlocks, blockSize>>>(state.data, hhVal1.data, hhVal4.data, hiddenDim);
 
-        // Launch the kernel
-        vecMulKernel<<<blocksPerGrid, threadsPerBlock>>>(state.data, hhVal0.data, newState.data, hiddenDim);
+        // newState += hh @ temp
+        const float alpha = 1.0f;
+        const float beta = 1.0f;
+
+        cublasSgemv(handle, CUBLAS_OP_N,
+                    hiddenDim, hiddenDim,
+                    &alpha,
+                    hh.data, hiddenDim,
+                    hhVal4.data, 1,
+                    &beta,
+                    newState.data, 1);
     }
 
     // Applies the activation function to the input matrix, storing the result in the output matrix
@@ -727,7 +775,7 @@ void serializeRNNLanguageModel(const RNNLanguageModel &model, const std::string 
         return;
     }
 
-    // Ensure kernels habe finished executing
+    // Ensure kernels have finished executing
     cudaDeviceSynchronize();
 
     out.write(reinterpret_cast<const char *>(&model.vocabSize), sizeof(int));
@@ -984,6 +1032,7 @@ void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits
     if (train)
     {
         model.getLogits(state, logits, handle);
+
         if (stepNum == 0)
         {
             model.getdYdLogits(token, state); // if this is the first step, only the embedding matrix has been used so we only calculate grad for the embedding matrix
@@ -1132,7 +1181,6 @@ int main()
                 std::flush(std::cout);
 
                 // Update model parameters
-                model.dL_dP.print("dL_dP");
                 optimizer.getGrads(model.dL_dP);
                 model.updateParams(handle);
 

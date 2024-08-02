@@ -308,25 +308,19 @@ struct RNNLanguageModel
             float gradVal = (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
 
             // hiddenToHidden
-            const float normVal = hh.norm(i);
-            const float normVal2 = normVal * hiddenDim;
             // Grad
-            float stateGradVal = 0.0f;
-            for (int j = 0; j < hiddenDim; j++)
-            {
-                stateGradVal += hh.data[i * hiddenDim + j];
-            }
-            dR_dRPrev.data[i * hiddenDim + i] = gradVal * stateGradVal / normVal2;
+            dR_dRPrev.data[i * hiddenDim + i] = gradVal * hhVal0.data[i];
             // hh weight
             for (int j = 0; j < hiddenDim; j++)
             {
-                dR_dPCurrent.data[i * numParams + hhIndex + i * hiddenDim + j] = gradVal * (inState.data[i] / normVal2 + (inState.data[i] * stateGradVal * hiddenDim * hh.data[i * hiddenDim + j]) / (normVal2 * normVal2 * normVal)); // Set hh grad
+                dR_dPCurrent.data[i * numParams + hhIndex + i * hiddenDim + j] = gradVal * (inState.data[i] * hhVal1.data[i] + inState.data[i] * hhVal3.data[i] * hhVal2.data[i * hiddenDim + j]); // Set hh grad
             }
 
             // inputToHidden
             for (int j = 0; j < hiddenDim; j++)
             {
-                dR_dPCurrent.data[i * numParams + token * hiddenDim + i] += ih.data[i * hiddenDim + j];                           // Accumulate grad into embedding after inputToHidden
+                // inputToHidden
+                dR_dPCurrent.data[i * numParams + token * hiddenDim + j] = gradVal * ihVal0.data[i];                              // Accumulate grad into embedding after inputToHidden
                 dR_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + j] = gradVal * embedding.data[token * hiddenDim + j]; // Set ih grad
             }
 
@@ -411,19 +405,18 @@ struct RNNLanguageModel
 
         for (int j = 0; j < hiddenDim; j++)
         {
+            // activationGradVal
             const float x = absFloat(newState.data[j]);
             const float term1 = x + 1.0f;
             const float term2 = x * x + term1;
             activationGradVal.data[j] = (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
-        }
 
-        for (int j = 0; j < hiddenDim; j++)
-        {
-            const float term1 = inState.data[j] * hhVal1.data[j];
-            const float term2 = inState.data[j] * hhVal3.data[j];
+            // hhVal4
+            const float term3 = inState.data[j] * hhVal1.data[j];
+            const float term4 = inState.data[j] * hhVal3.data[j];
             for (int k = 0; k < hiddenDim; k++)
             {
-                hhVal4.data[j * hiddenDim + k] = term1 + term2 * hhVal2.data[j * hiddenDim + k];
+                hhVal4.data[j * hiddenDim + k] = term3 + term4 * hhVal2.data[j * hiddenDim + k];
             }
         }
 
@@ -451,7 +444,7 @@ struct RNNLanguageModel
                 }
 
                 // inputToHidden
-                dY_dPCurrent.data[i * numParams + token * hiddenDim + j] = ihVal0.data[j]; // Accumulate grad into embedding after inputToHidden
+                dY_dPCurrent.data[i * numParams + token * hiddenDim + j] = gradVal * ihVal0.data[j]; // Accumulate grad into embedding after inputToHidden
 
                 // hiddenBias
                 dY_dPCurrent.data[i * numParams + hiddenBiasIndex + j] = gradVal; // Set bias grad
@@ -547,24 +540,28 @@ struct RNNLanguageModel
         }
     }
 
-    // newState += embedding[token] @ ih
+    // newState = ih @ embedding[token]
     void inputToHidden(int token)
     {
         for (int i = 0; i < hiddenDim; i++)
         {
             for (int j = 0; j < hiddenDim; j++)
             {
-                newState.data[i] += embedding.data[hiddenDim * token + i] * ih.data[i * hiddenDim + j];
+                newState.data[j] += embedding.data[hiddenDim * token + i] * ih.data[i * hiddenDim + j];
             }
         }
     }
 
-    // newState += state @ hh
+    // newState += hh @ state
     void hiddenToHidden(Matrix &state)
     {
         for (int i = 0; i < hiddenDim; i++)
         {
-            newState.data[i] += state.data[i] * hhVal0.data[i];
+            const float mulVal = state.data[i] * hhVal1.data[i];
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                newState.data[j] += mulVal * hh.data[i * hiddenDim + j];
+            }
         }
     }
 
