@@ -10,11 +10,12 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <cstdlib>
 #include <vector>
 #include <string>
 
 #include <immintrin.h>
-#include <omp.h>
+#include <memory>
 
 constexpr float MAX_GRAD = 100.0f;           // This is the magnitude of what the gradient will be set to if we get -INF while getting loss (due to log(0)). This way we avoid -inf values messing up our grads/params
 constexpr float PI = 3.14159265358979323846; // Mathematical constant pi. Used when generating random points from a normal distribution (randDist)
@@ -88,7 +89,15 @@ struct Matrix
 
     Matrix(int r, int c) : rows(r), cols(c), numValues(r * c)
     {
-        data = new float[rows * cols];
+        // data = new float[rows * cols];
+
+        size_t size = rows * cols; // Number of floats
+        size_t alignment = 32;
+        size_t space = size * sizeof(float) + alignment;
+        void *ptr = operator new(space);
+        void *aligned_ptr = std::align(alignment, size * sizeof(float), ptr, space);
+        data = static_cast<float *>(aligned_ptr);
+
         zeros();
     }
 
@@ -150,7 +159,10 @@ struct Matrix
 
     void copy(Matrix &other)
     {
-        std::copy(other.data, other.data + numValues, data);
+        for (int i = 0; i < numValues; i++)
+        {
+            data[i] = other.data[i];
+        }
     }
 
     // Prints the matrix to the terminal
@@ -300,13 +312,16 @@ struct RNNLanguageModel
 
     void getdR(int token, Matrix &state)
     {
-        //dR_dPCurrent.zeros();
-        // set non-token indices of embedding to 0
-        for (int i = 0; i < hiddenDim; i++) {
-            for (int j = 0; j < token * hiddenDim; j++) {
+        // dR_dPCurrent.zeros();
+        //  set non-token indices of embedding to 0
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            for (int j = 0; j < token * hiddenDim; j++)
+            {
                 dR_dPCurrent.data[i * numParams + j] = 0.0f;
             }
-            for (int j = token * hiddenDim + hiddenDim; j < vocabSize * hiddenDim; j++) {
+            for (int j = token * hiddenDim + hiddenDim; j < vocabSize * hiddenDim; j++)
+            {
                 dR_dPCurrent.data[i * numParams + j] = 0.0f;
             }
         }
@@ -417,37 +432,39 @@ struct RNNLanguageModel
         const __m256 one = _mm256_set1_ps(1.0f);
         const __m256 neg_one = _mm256_set1_ps(-1.0f);
         const __m256 tokVal = _mm256_set1_ps(token);
+        __m256i indices = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
 
         for (int i = 0; i < vocabSize; i += 8)
         {
-            __m256 x = _mm256_loadu_ps(&probs.data[i]);
+            __m256 x = _mm256_load_ps(&probs.data[i]);
 
             // 1/x if i == token else 1/(1-x)
-            __m256 temp0 = _mm256_cmp_ps(tokVal, _mm256_set_ps(i + 7, i + 6, i + 5, i + 4, i + 3, i + 2, i + 1, i), _CMP_EQ_OQ); // mask
+            __m256 temp0 = _mm256_cmp_ps(tokVal, _mm256_cvtepi32_ps(_mm256_add_epi32(_mm256_set1_epi32(i), indices)), _CMP_EQ_OQ);
+            //__m256 temp0 = _mm256_cmp_ps(tokVal, _mm256_set_ps(i + 7, i + 6, i + 5, i + 4, i + 3, i + 2, i + 1, i), _CMP_EQ_OQ); // mask
+            __m256 one_sub_x = _mm256_sub_ps(one, x);
             __m256 gradVal = _mm256_blendv_ps(
-                _mm256_div_ps(one, _mm256_sub_ps(one, x)),
+                _mm256_div_ps(one, one_sub_x),
                 _mm256_div_ps(neg_one, x),
                 temp0);
 
             // gradVal = gradVal * (x - x * x)
-            temp0 = _mm256_mul_ps(x, x);
-            gradVal = _mm256_mul_ps(gradVal, _mm256_sub_ps(x, temp0));
+            gradVal = _mm256_mul_ps(gradVal, _mm256_mul_ps(x, one_sub_x));
 
             // dL_dP = dL_dY @ (dY_dRPrev @ delta + dY_dPCurrent) + dL_dP
             for (int j = 0; j < hiddenDim; j++)
             {
-                __m256 temp1 = _mm256_set1_ps(dY_dRPrev.data[i * hiddenDim + j]);
+                temp0 = _mm256_set1_ps(dY_dRPrev.data[i * hiddenDim + j]);
 
                 for (int k = 0; k < numParams; k += 8)
                 {
-                    __m256 dY_dPCurrent_ik = _mm256_loadu_ps(&dY_dPCurrent.data[i * numParams + k]);
-                    __m256 delta_jk = _mm256_loadu_ps(&delta.data[j * numParams + k]);
+                    __m256 dY_dPCurrent_ik = _mm256_load_ps(&dY_dPCurrent.data[i * numParams + k]);
+                    __m256 delta_jk = _mm256_load_ps(&delta.data[j * numParams + k]);
 
-                    dY_dPCurrent_ik = _mm256_fmadd_ps(temp1, delta_jk, dY_dPCurrent_ik); // dY_dP = dY_dRPrev @ delta + dY_dPCurrent
-                    __m256 temp2 = _mm256_loadu_ps(&dL_dP.data[k]);
-                    temp2 = _mm256_fmadd_ps(gradVal, dY_dPCurrent_ik, temp2); // dL_dP = dL_dY @ dY_dP + dL_dP
+                    dY_dPCurrent_ik = _mm256_fmadd_ps(temp0, delta_jk, dY_dPCurrent_ik); // dY_dP = dY_dRPrev @ delta + dY_dPCurrent
+                    __m256 temp1 = _mm256_load_ps(&dL_dP.data[k]);
+                    temp1 = _mm256_fmadd_ps(gradVal, dY_dPCurrent_ik, temp1); // dL_dP = dL_dY @ dY_dP + dL_dP
 
-                    _mm256_storeu_ps(&dL_dP.data[k], temp1);
+                    _mm256_store_ps(&dL_dP.data[k], temp0);
                 }
             }
         }
@@ -472,7 +489,7 @@ struct RNNLanguageModel
     }
 
     // Specifically for this model, dR_dRPrev is always 0 for values not on the diagonal, so we can optimize it a bit
-    void getDelta()
+    void getDelta2()
     {
         const int blockSize = 8; // AVX2 processes 8 floats at a time
 
@@ -481,56 +498,39 @@ struct RNNLanguageModel
             __m256 dR_dRPrev_vec = _mm256_set1_ps(dR_dRPrev.data[i]);
             for (int j = 0; j < numParams; j += blockSize)
             {
-                __m256 delta_vec = _mm256_loadu_ps(&delta.data[i * numParams + j]);
-                __m256 dR_dPCurrent_vec = _mm256_loadu_ps(&dR_dPCurrent.data[i * numParams + j]);
+                __m256 delta_vec = _mm256_load_ps(&delta.data[i * numParams + j]);
+                __m256 dR_dPCurrent_vec = _mm256_load_ps(&dR_dPCurrent.data[i * numParams + j]);
 
                 delta_vec = _mm256_fmadd_ps(dR_dRPrev_vec, delta_vec, dR_dPCurrent_vec);
 
-                _mm256_storeu_ps(&delta.data[i * numParams + j], delta_vec);
-
-                // delta.data[i * numParams + j] = dR_dPCurrent.data[i * numParams + j] + dR_dRPrev.data[i] * delta.data[i * numParams + j];
+                _mm256_store_ps(&delta.data[i * numParams + j], delta_vec);
             }
         }
     }
 
-    void getdYOLD()
-    {
-        for (int i = 0; i < vocabSize; i++)
-        {
-            for (int j = 0; j < hiddenDim; j++)
-            {
-                for (int k = 0; k < numParams; k++)
-                {
-                    dY_dPCurrent.data[i * numParams + k] += dY_dRPrev.data[i * hiddenDim + j] * delta.data[j * numParams + k];
-                }
-            }
-        }
-    }
-
-    void getdY()
+    // Specifically for this model, dR_dRPrev is always 0 for values not on the diagonal, so we can optimize it a bit
+    void getDelta()
     {
         const int blockSize = 8; // AVX2 processes 8 floats at a time
 
-        for (int i = 0; i < vocabSize; i++)
+        for (int i = 0; i < hiddenDim; i++)
         {
-            for (int j = 0; j < hiddenDim; j++)
+            __m256 dR_dRPrev_vec = _mm256_set1_ps(dR_dRPrev.data[i]);
+            for (int j = 0; j < numParams; j += 4 * blockSize)
             {
-                __m256 dY_dRPrev_vec = _mm256_set1_ps(dY_dRPrev.data[i * hiddenDim + j]);
+                // Prefetch next iterations
+                _mm_prefetch((const char *)&delta.data[i * numParams + j + 4 * blockSize], _MM_HINT_T0);
+                _mm_prefetch((const char *)&dR_dPCurrent.data[i * numParams + j + 4 * blockSize], _MM_HINT_T0);
 
-                for (int k = 0; k < numParams; k += blockSize)
+                // Process 4 blocks at once
+                for (int k = 0; k < 4; k++)
                 {
-                    __m256 delta_vec = _mm256_loadu_ps(&delta.data[j * numParams + k]);
-                    __m256 dY_dPCurrent_vec = _mm256_loadu_ps(&dY_dPCurrent.data[i * numParams + k]);
+                    __m256 delta_vec = _mm256_load_ps(&delta.data[i * numParams + j + k * blockSize]);
+                    __m256 dR_dPCurrent_vec = _mm256_load_ps(&dR_dPCurrent.data[i * numParams + j + k * blockSize]);
 
-                    __m256 result = _mm256_fmadd_ps(dY_dRPrev_vec, delta_vec, dY_dPCurrent_vec);
+                    delta_vec = _mm256_fmadd_ps(dR_dRPrev_vec, delta_vec, dR_dPCurrent_vec);
 
-                    _mm256_storeu_ps(&dY_dPCurrent.data[i * numParams + k], result);
-                }
-
-                // Handle remaining elements if numParams is not divisible by blockSize
-                for (int k = numParams - (numParams % blockSize); k < numParams; k++)
-                {
-                    dY_dPCurrent.data[i * numParams + k] += dY_dRPrev.data[i * hiddenDim + j] * delta.data[j * numParams + k];
+                    _mm256_store_ps(&delta.data[i * numParams + j + k * blockSize], delta_vec);
                 }
             }
         }

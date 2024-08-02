@@ -98,7 +98,7 @@ void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits
 int main()
 {
     // Model parameters
-    constexpr int vocabSize = 95;
+    constexpr int vocabSize = 96;
     constexpr int hiddenDim = 32;
 
     // Learning parameters
@@ -231,8 +231,8 @@ int main()
                 // Save model
                 serializeRNNLanguageModel(model, savePath);
 
-                std::cout << tokensPerSecond << std::endl;
-                exit(0);
+                //std::cout << tokensPerSecond << std::endl;
+                //exit(0);
 
                 // Clear text
                 clearLines(3);

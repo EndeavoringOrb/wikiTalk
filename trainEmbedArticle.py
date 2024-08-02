@@ -45,12 +45,15 @@ if __name__ == "__main__":
     tokenFolder = "tokenData"
     totalNumPages = 551_617
 
+    device = torch.device("cpu") #torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using {device}")
+
     # Prepare your data
     numFiles = len(os.listdir(tokenFolder))
 
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
-    model = RNNLanguage(vocab_size, hidden_dim)
+    model = RNNLanguage(vocab_size, hidden_dim).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     print(f"Hidden Dim: {hidden_dim:,}")
@@ -73,10 +76,10 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
             # tokenize text
-            textTensor = torch.tensor(textTokens)
+            textTensor = torch.tensor(textTokens, device=device)
 
             # Get text embedding by passing text through model
-            state = torch.zeros(model.hiddenDim)
+            state = torch.zeros(model.hiddenDim, device=device)
             for token in tqdm(textTokens, desc="Getting Embedding"):
                 state = model(state, token)
 
