@@ -85,9 +85,9 @@ void trainStep(int token, RNNLanguageModel &model, Matrix &state, Matrix &logits
             model.getdYCurrent(token, state);
         }
 
-        model.getdY();   // dY_dP = dY_dPCurrent + dY_dRPrev @ delta
+        // model.getdY();   // dY_dP = dY_dPCurrent + dY_dRPrev @ delta
         softmax(logits); // logits -> probs
-        model.getdL(token, logits);
+        model.getdL(token, logits); // dL_dP = dL_dY @ dY_dP
     }
 
     model.forward(state, token);
@@ -99,7 +99,7 @@ int main()
 {
     // Model parameters
     constexpr int vocabSize = 95;
-    constexpr int hiddenDim = 16;
+    constexpr int hiddenDim = 32;
 
     // Learning parameters
     float learningRate = 0.001f;
@@ -230,6 +230,9 @@ int main()
 
                 // Save model
                 serializeRNNLanguageModel(model, savePath);
+
+                std::cout << tokensPerSecond << std::endl;
+                exit(0);
 
                 // Clear text
                 clearLines(3);

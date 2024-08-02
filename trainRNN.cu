@@ -13,7 +13,7 @@
 #include <vector>
 #include <string>
 
-constexpr int MAX_THREADS_PER_BLOCK = 256;
+constexpr int MAX_THREADS_PER_BLOCK = 32;
 constexpr float MAX_GRAD = 100.0f;           // This is the magnitude of what the gradient will be set to if we get -INF while getting loss (due to log(0)). This way we avoid -inf values messing up our grads/params
 constexpr float PI = 3.14159265358979323846; // Mathematical constant pi. Used when generating random points from a normal distribution (randDist)
 
@@ -1056,7 +1056,7 @@ int main()
 {
     // Model parameters
     constexpr int vocabSize = 95;
-    constexpr int hiddenDim = 16;
+    constexpr int hiddenDim = 256;
 
     // Learning parameters
     float learningRate = 0.001f;

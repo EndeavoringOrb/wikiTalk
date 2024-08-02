@@ -13,6 +13,8 @@
 #include <vector>
 #include <string>
 
+#include <immintrin.h>
+
 constexpr float MAX_GRAD = 100.0f;           // This is the magnitude of what the gradient will be set to if we get -INF while getting loss (due to log(0)). This way we avoid -inf values messing up our grads/params
 constexpr float PI = 3.14159265358979323846; // Mathematical constant pi. Used when generating random points from a normal distribution (randDist)
 
@@ -329,22 +331,23 @@ struct RNNLanguageModel
         }
     }
 
-    void getdL(const int token, Matrix &probs)
+    void getdL1(const int token, Matrix &probs)
     {
         // Get dL_dY
         for (int i = 0; i < vocabSize; i++)
         {
             const float x = probs.data[i]; // x = e^x / sumExp
+            float gradVal;
 
             if (i == token)
             {
                 // Derivative of the loss for the correct token
-                dL_dY.data[i] = -1.0f / x + 1.0f;
+                gradVal = -1.0f / x + 1.0f;
             }
             else
             {
                 // Derivative of the loss for an incorrect token
-                dL_dY.data[i] = 1.0f / (1.0f - x) - 1.0f;
+                gradVal = 1.0f / (1.0f - x) - 1.0f;
             }
 
             // softmax backward
@@ -353,20 +356,96 @@ struct RNNLanguageModel
             // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * d/dx (sumExp)
             // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * e^x
             // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
-            dL_dY.data[i] *= x - x * x; // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
-        }
+            gradVal *= x - x * x; // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
 
-        // dL_dP += dL_dY @ dY_dP
-        for (int i = 0; i < vocabSize; i++)
-        {
+            // dL_dP += dL_dY @ dY_dP
             for (int j = 0; j < numParams; j++)
             {
-                dL_dP.data[j] += dL_dY.data[i] * dY_dPCurrent.data[i * numParams + j];
+                dL_dP.data[j] += gradVal * dY_dPCurrent.data[i * numParams + j];
             }
         }
     }
 
-    void getDelta()
+    void getdL2(const int token, Matrix &probs)
+    {
+        // Get dL_dY
+        for (int i = 0; i < vocabSize; i++)
+        {
+            const float x = probs.data[i]; // x = e^x / sumExp
+            float gradVal;
+
+            if (i == token)
+            {
+                // Derivative of the loss for the correct token
+                gradVal = -1.0f / x + 1.0f;
+            }
+            else
+            {
+                // Derivative of the loss for an incorrect token
+                gradVal = 1.0f / (1.0f - x) - 1.0f;
+            }
+
+            // softmax backward
+            // d/dx (e^x * (1/sumExp))
+            // d/dx (e^x) * (1/sumExp) + e^x * d/dx (1/sumExp)
+            // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * d/dx (sumExp)
+            // e^x * (1/sumExp) - e^x * (1/(sumExp ** 2)) * e^x
+            // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
+            gradVal *= x - x * x; // (e^x / sumExp) - (e^x * e^x) / (sumExp * sumExp)
+
+            // dL_dP += dL_dY @ (dY_dPCurrent + dY_dRPrev @ delta)
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                for (int k = 0; k < numParams; k++)
+                {
+                    dL_dP.data[k] += gradVal * (dY_dPCurrent.data[i * numParams + k] + dY_dRPrev.data[i * hiddenDim + j] * delta.data[j * numParams + k]);
+                }
+            }
+        }
+    }
+
+    // dL_dP = dL_dY @ (dY_dRPrev @ delta + dY_dPCurrent) + dL_dP
+    void getdL(const int token, const Matrix &probs)
+    {
+        const __m256 one = _mm256_set1_ps(1.0f);
+        const __m256 neg_one = _mm256_set1_ps(-1.0f);
+        const __m256 tokVal = _mm256_set1_ps(token);
+
+        for (int i = 0; i < vocabSize; i += 8)
+        {
+            __m256 x = _mm256_loadu_ps(&probs.data[i]);
+
+            // 1/x if i == token else 1/(1-x)
+            __m256 temp0 = _mm256_cmp_ps(tokVal, _mm256_set_ps(i + 7, i + 6, i + 5, i + 4, i + 3, i + 2, i + 1, i), _CMP_EQ_OQ); // mask
+            __m256 gradVal = _mm256_blendv_ps(
+                _mm256_div_ps(one, _mm256_sub_ps(one, x)),
+                _mm256_div_ps(neg_one, x),
+                temp0);
+
+            // gradVal = gradVal * (x - x * x)
+            temp0 = _mm256_mul_ps(x, x);
+            gradVal = _mm256_mul_ps(gradVal, _mm256_sub_ps(x, temp0));
+
+            // dL_dP = dL_dY @ (dY_dRPrev @ delta + dY_dPCurrent) + dL_dP
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                for (int k = 0; k < numParams; k += 8)
+                {
+                    __m256 dY_dPCurrent_ik = _mm256_loadu_ps(&dY_dPCurrent.data[i * numParams + k]);
+                    __m256 temp1 = _mm256_set1_ps(dY_dRPrev.data[i * hiddenDim + j]);
+                    __m256 delta_jk = _mm256_loadu_ps(&delta.data[j * numParams + k]);
+
+                    dY_dPCurrent_ik = _mm256_fmadd_ps(temp1, delta_jk, dY_dPCurrent_ik); // dY_dP = dY_dRPrev @ delta + dY_dPCurrent
+                    temp1 = _mm256_loadu_ps(&dL_dP.data[k]);
+                    temp1 = _mm256_fmadd_ps(gradVal, dY_dPCurrent_ik, temp1); // dL_dP = dL_dY @ dY_dP + dL_dP
+
+                    _mm256_storeu_ps(&dL_dP.data[k], temp1);
+                }
+            }
+        }
+    }
+
+    void getDeltaOLD()
     {
         for (int i = 0; i < hiddenDim; i++)
         {
@@ -384,7 +463,19 @@ struct RNNLanguageModel
         }
     }
 
-    void getdY()
+    // Specifically for this model, dR_dRPrev is always 0 for values not on the diagonal, so we can optimize it a bit
+    void getDelta()
+    {
+        for (int i = 0; i < hiddenDim; i++)
+        {
+            for (int k = 0; k < numParams; k++)
+            {
+                delta.data[i * numParams + k] = dR_dPCurrent.data[i * numParams + k] + dR_dRPrev.data[i * hiddenDim + i] * delta.data[i * numParams + k];
+            }
+        }
+    }
+
+    void getdYOLD()
     {
         for (int i = 0; i < vocabSize; i++)
         {
@@ -398,10 +489,38 @@ struct RNNLanguageModel
         }
     }
 
+    void getdY()
+    {
+        const int blockSize = 8; // AVX2 processes 8 floats at a time
+
+        for (int i = 0; i < vocabSize; i++)
+        {
+            for (int j = 0; j < hiddenDim; j++)
+            {
+                __m256 dY_dRPrev_vec = _mm256_set1_ps(dY_dRPrev.data[i * hiddenDim + j]);
+
+                for (int k = 0; k < numParams; k += blockSize)
+                {
+                    __m256 delta_vec = _mm256_loadu_ps(&delta.data[j * numParams + k]);
+                    __m256 dY_dPCurrent_vec = _mm256_loadu_ps(&dY_dPCurrent.data[i * numParams + k]);
+
+                    __m256 result = _mm256_fmadd_ps(dY_dRPrev_vec, delta_vec, dY_dPCurrent_vec);
+
+                    _mm256_storeu_ps(&dY_dPCurrent.data[i * numParams + k], result);
+                }
+
+                // Handle remaining elements if numParams is not divisible by blockSize
+                for (int k = numParams - (numParams % blockSize); k < numParams; k++)
+                {
+                    dY_dPCurrent.data[i * numParams + k] += dY_dRPrev.data[i * hiddenDim + j] * delta.data[j * numParams + k];
+                }
+            }
+        }
+    }
+
     void getdYCurrent(int token, Matrix &state)
     {
         dY_dPCurrent.zeros();
-        dY_dRPrev.zeros();
 
         for (int j = 0; j < hiddenDim; j++)
         {

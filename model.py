@@ -24,7 +24,7 @@ class RNNLanguage(nn.Module):
         self.hiddenDim = hiddenDim
 
     def forward(self, state, x):
-        embedded = self.embedding[x]
+        embedded = self.activation(self.embedding[x])
         newState = self.activation(embedded @ self.ih + state @ (self.hh / (torch.norm(self.hh, dim=1) * self.hiddenDim)) + self.bias)
         
         return newState
