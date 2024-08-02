@@ -14,6 +14,7 @@
 #include <string>
 
 #include <immintrin.h>
+#include <omp.h>
 
 constexpr float MAX_GRAD = 100.0f;           // This is the magnitude of what the gradient will be set to if we get -INF while getting loss (due to log(0)). This way we avoid -inf values messing up our grads/params
 constexpr float PI = 3.14159265358979323846; // Mathematical constant pi. Used when generating random points from a normal distribution (randDist)
@@ -224,7 +225,7 @@ struct RNNLanguageModel
           dY_dPCurrent(_vocabSize, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
           dL_dY(1, _vocabSize),
           dL_dP(1, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
-          dR_dRPrev(_hiddenDim, _hiddenDim),
+          dR_dRPrev(1, _hiddenDim),
           dR_dPCurrent(_hiddenDim, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
           delta(_hiddenDim, _vocabSize * _hiddenDim + 2 * _hiddenDim * _hiddenDim + _hiddenDim),
 
@@ -299,28 +300,34 @@ struct RNNLanguageModel
 
     void getdR(int token, Matrix &state)
     {
-        dR_dPCurrent.zeros();
-        dR_dRPrev.zeros();
+        //dR_dPCurrent.zeros();
+        // set non-token indices of embedding to 0
+        for (int i = 0; i < hiddenDim; i++) {
+            for (int j = 0; j < token * hiddenDim; j++) {
+                dR_dPCurrent.data[i * numParams + j] = 0.0f;
+            }
+            for (int j = token * hiddenDim + hiddenDim; j < vocabSize * hiddenDim; j++) {
+                dR_dPCurrent.data[i * numParams + j] = 0.0f;
+            }
+        }
+
         for (int i = 0; i < hiddenDim; i++)
         {
             // activation
             const float x = absFloat(state.data[i]);
             const float term1 = x + 1.0f;
             const float term2 = x * x + term1;
-            float gradVal = (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
+            const float gradVal = (x + term1) / (term2 * term2); // grad = grad * ..., but because this is the first backProp step here, grad is 1 so we can just set grad to ...
 
             // hiddenToHidden
             // Grad
-            dR_dRPrev.data[i * hiddenDim + i] = gradVal * hhVal0.data[i];
-            // hh weight
-            for (int j = 0; j < hiddenDim; j++)
-            {
-                dR_dPCurrent.data[i * numParams + hhIndex + i * hiddenDim + j] = gradVal * (inState.data[i] * hhVal1.data[i] + inState.data[i] * hhVal3.data[i] * hhVal2.data[i * hiddenDim + j]); // Set hh grad
-            }
+            dR_dRPrev.data[i] = gradVal * hhVal0.data[i];
 
-            // inputToHidden
             for (int j = 0; j < hiddenDim; j++)
             {
+                // hh weight
+                dR_dPCurrent.data[i * numParams + hhIndex + i * hiddenDim + j] = gradVal * (inState.data[i] * hhVal1.data[i] + inState.data[i] * hhVal3.data[i] * hhVal2.data[i * hiddenDim + j]); // Set hh grad
+
                 // inputToHidden
                 dR_dPCurrent.data[i * numParams + token * hiddenDim + j] = gradVal * ihVal0.data[i];                              // Accumulate grad into embedding after inputToHidden
                 dR_dPCurrent.data[i * numParams + ihIndex + j * hiddenDim + j] = gradVal * embedding.data[token * hiddenDim + j]; // Set ih grad
@@ -429,15 +436,16 @@ struct RNNLanguageModel
             // dL_dP = dL_dY @ (dY_dRPrev @ delta + dY_dPCurrent) + dL_dP
             for (int j = 0; j < hiddenDim; j++)
             {
+                __m256 temp1 = _mm256_set1_ps(dY_dRPrev.data[i * hiddenDim + j]);
+
                 for (int k = 0; k < numParams; k += 8)
                 {
                     __m256 dY_dPCurrent_ik = _mm256_loadu_ps(&dY_dPCurrent.data[i * numParams + k]);
-                    __m256 temp1 = _mm256_set1_ps(dY_dRPrev.data[i * hiddenDim + j]);
                     __m256 delta_jk = _mm256_loadu_ps(&delta.data[j * numParams + k]);
 
                     dY_dPCurrent_ik = _mm256_fmadd_ps(temp1, delta_jk, dY_dPCurrent_ik); // dY_dP = dY_dRPrev @ delta + dY_dPCurrent
-                    temp1 = _mm256_loadu_ps(&dL_dP.data[k]);
-                    temp1 = _mm256_fmadd_ps(gradVal, dY_dPCurrent_ik, temp1); // dL_dP = dL_dY @ dY_dP + dL_dP
+                    __m256 temp2 = _mm256_loadu_ps(&dL_dP.data[k]);
+                    temp2 = _mm256_fmadd_ps(gradVal, dY_dPCurrent_ik, temp2); // dL_dP = dL_dY @ dY_dP + dL_dP
 
                     _mm256_storeu_ps(&dL_dP.data[k], temp1);
                 }
@@ -466,11 +474,21 @@ struct RNNLanguageModel
     // Specifically for this model, dR_dRPrev is always 0 for values not on the diagonal, so we can optimize it a bit
     void getDelta()
     {
+        const int blockSize = 8; // AVX2 processes 8 floats at a time
+
         for (int i = 0; i < hiddenDim; i++)
         {
-            for (int k = 0; k < numParams; k++)
+            __m256 dR_dRPrev_vec = _mm256_set1_ps(dR_dRPrev.data[i]);
+            for (int j = 0; j < numParams; j += blockSize)
             {
-                delta.data[i * numParams + k] = dR_dPCurrent.data[i * numParams + k] + dR_dRPrev.data[i * hiddenDim + i] * delta.data[i * numParams + k];
+                __m256 delta_vec = _mm256_loadu_ps(&delta.data[i * numParams + j]);
+                __m256 dR_dPCurrent_vec = _mm256_loadu_ps(&dR_dPCurrent.data[i * numParams + j]);
+
+                delta_vec = _mm256_fmadd_ps(dR_dRPrev_vec, delta_vec, dR_dPCurrent_vec);
+
+                _mm256_storeu_ps(&delta.data[i * numParams + j], delta_vec);
+
+                // delta.data[i * numParams + j] = dR_dPCurrent.data[i * numParams + j] + dR_dRPrev.data[i] * delta.data[i * numParams + j];
             }
         }
     }
@@ -520,7 +538,11 @@ struct RNNLanguageModel
 
     void getdYCurrent(int token, Matrix &state)
     {
-        dY_dPCurrent.zeros();
+        // dY_dPCurrent.zeros();
+        // dont need to set embedding grad to zero, it will be overwritten
+        // dont need to set hh grad to zero, it will be overwritten
+        // dont need to set ih grad to zero, it will be overwritten
+        // dont need to set bias grad either
 
         for (int j = 0; j < hiddenDim; j++)
         {

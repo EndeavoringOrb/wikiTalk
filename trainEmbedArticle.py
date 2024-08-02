@@ -36,7 +36,7 @@ def loadTextTokens(folder):
 if __name__ == "__main__":
     # Hyperparameters
     vocab_size = len(vocab)
-    hidden_dim = 16
+    hidden_dim = 128
     num_epochs = 100
     learning_rate = 0.001
 
