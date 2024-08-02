@@ -8,7 +8,8 @@ from helperFuncs import *
 from tqdm import tqdm, trange
 from model import *
 from vocab import *
-from tokenizeWiki import read_compact_data
+from tokenizeWiki import loadTokens
+from time import perf_counter
 
 
 def getNumPages(folder):
@@ -16,13 +17,6 @@ def getNumPages(folder):
         text = f.read()
         numPages = int(text.split(" ")[0].strip())
     return numPages
-
-
-def loadTextTokens(folder):
-    files = sorted(os.listdir(folder), key=lambda x: int(x.split(".")[0]))
-    for file in files:
-        for titleTokens, textTokens in read_compact_data(f"{folder}/{file}"):
-            yield textTokens
 
 
 # Create vocab
@@ -35,17 +29,19 @@ def loadTextTokens(folder):
 
 if __name__ == "__main__":
     # Hyperparameters
-    vocab_size = len(vocab)
+    vocab_size = len(vocab) + 1  # +1 for separating token between title and text
     hidden_dim = 128
     num_epochs = 100
     learning_rate = 0.001
 
     # Settings
-    modelSavePath = "models/embedArticle/0.pt"
+    modelSavePath = "models/embedArticle/2.pt"
     tokenFolder = "tokenData"
     totalNumPages = 551_617
 
-    device = torch.device("cpu") #torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cpu"
+    )  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device}")
 
     # Prepare your data
@@ -61,30 +57,36 @@ if __name__ == "__main__":
     print(f"# Input->Hidden Params: {hidden_dim * hidden_dim:,}")
     print(f"# Hidden->Hidden Params: {hidden_dim * hidden_dim:,}")
     print(f"# Hidden Bias Params: {hidden_dim * hidden_dim:,}")
-    print(f"Total # Params: {vocab_size * hidden_dim + 2 * hidden_dim * hidden_dim + hidden_dim:,}")
-
+    print(
+        f"Total # Params: {vocab_size * hidden_dim + 2 * hidden_dim * hidden_dim + hidden_dim:,}"
+    )
 
     # Training loop
     for epoch in range(num_epochs):
         totalLoss = 0
         lastLoss = "N/A"
+        lastTokSec = 0
         numPages = 0
 
-        for stepNum, textTokens in enumerate(loadTextTokens(tokenFolder)):
-            print(f"Epoch [{epoch+1}/{num_epochs}], Step [{stepNum + 1}/{totalNumPages}], Last Loss: {lastLoss}")
+        for stepNum, (titleTokens, textTokens) in enumerate(loadTokens(tokenFolder)):
+            print(
+                f"Epoch [{epoch+1}/{num_epochs}], Step [{stepNum + 1}/{totalNumPages}], Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
+            )
+            start = perf_counter()
             # zero model grad
             optimizer.zero_grad()
 
-            # tokenize text
-            textTensor = torch.tensor(textTokens, device=device)
-
             # Get text embedding by passing text through model
             state = torch.zeros(model.hiddenDim, device=device)
-            for token in tqdm(textTokens, desc="Getting Embedding"):
+            for token in tqdm(titleTokens, desc="Getting Embedding"):
                 state = model(state, token)
+            state = model(state, vocab_size - 1)  # separating token
 
             # Initialize loss
             loss = 0
+
+            # tokenize text
+            textTensor = torch.tensor(textTokens, device=device)
 
             # Get reconstruction loss for text
             for token in tqdm(textTensor, desc="Reconstructing"):
@@ -98,9 +100,11 @@ if __name__ == "__main__":
             optimizer.step()
 
             # Track loss and numPages
+            stop = perf_counter()
             lossValue = loss.item()
             totalLoss += lossValue
             lastLoss = lossValue / len(textTokens)
+            lastTokSec = int((len(titleTokens) + len(textTokens)) / (stop - start))
             numPages += 1
 
             # Save the trained model

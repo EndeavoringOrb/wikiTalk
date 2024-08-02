@@ -2,6 +2,43 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
+from line_profiler import profile
+import os
+os.environ["LINE_PROFILE"] = "1"
+
+class CustomActivation(torch.autograd.Function):
+    @profile
+    def fastForward(x):
+        xSign = torch.sign(x)
+        x = xSign * x # x = abs(x)
+        term1 = x + x * x # x = x^2 + x
+        output = term1 / term1 + 1 # (x^2 + x) / (x^2 + x + 1)
+        return output * xSign # -output if x < 0 else output
+
+    @staticmethod
+    @profile
+    def forward(ctx, x):
+        xSign = torch.sign(x)
+        x = xSign * x # x = abs(x)
+        ctx.save_for_backward(x)
+        term1 = x + x * x # x = x^2 + x
+        output = term1 / term1 + 1 # (x^2 + x) / (x^2 + x + 1)
+        return output * xSign # -output if x < 0 else output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        term1 = x + 1
+        term2 = x * x + term1
+        grad_input = (x + term1) / (term2 * term2)
+        return grad_input * grad_output
+
+class CustomActivationModule(nn.Module):
+    def forward(self, x):
+        return CustomActivation.apply(x)
+    
+    def fastForward(self, x):
+        return CustomActivation.fastForward(x)
 
 # Define the RNN model
 class RNNLanguage(nn.Module):
@@ -19,9 +56,26 @@ class RNNLanguage(nn.Module):
         self.bias = nn.Parameter(data)
 
         self.activation = nn.Tanh()
+        self.activation = CustomActivationModule()
 
         self.vocabSize = vocabSize
         self.hiddenDim = hiddenDim
+
+    def preCompute(self):
+        self.scaledHH = (self.hh / (torch.norm(self.hh, dim=1) * self.hiddenDim))
+
+    @torch.no_grad()
+    @profile
+    def fastForward(self, state, x):
+        embedded = self.embedding[x]
+        embedded = self.activation.fastForward(embedded)
+
+        newState = embedded @ self.ih
+        newState += state @ self.scaledHH
+        newState += self.bias
+        newState = self.activation.fastForward(newState)
+        
+        return newState
 
     def forward(self, state, x):
         embedded = self.activation(self.embedding[x])

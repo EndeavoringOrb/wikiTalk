@@ -1,9 +1,6 @@
 import mwxml
 import os
-import line_profiler
 from tqdm import tqdm
-
-os.environ["LINE_PROFILE"] = "0"
 
 def replaceChars(text: str, replace: list):
     for invalid, valid in replace:
@@ -63,7 +60,6 @@ def getInfo(folder, vocab, replace):
     return numPages, numValidPages, newVocab
 
 
-@line_profiler.profile
 def wikiLoader(folder):
     for subFolder in os.listdir(folder):
         if subFolder.endswith(".txt"):
@@ -85,7 +81,6 @@ def wikiLoader(folder):
 
                     yield title, text
 
-@line_profiler.profile
 def wikiLoader(folder, vocab, replace):
     for subFolder in os.listdir(folder):
         if subFolder.endswith(".txt"):
