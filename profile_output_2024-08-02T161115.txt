@@ -1,0 +1,108 @@
+Timer unit: 1e-07 s
+
+Total time: 50.3296 s
+File: C:\Users\aaron\CODING\wikiTalk\model.py
+Function: fastForward at line 10
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    10                                               @profile
+    11                                               def fastForward(x):
+    12   2390639   70778716.0     29.6     14.1          xSign = torch.sign(x)
+    13   2390639   59071768.0     24.7     11.7          x = xSign * x # x = abs(x)
+    14   2390639  104773056.0     43.8     20.8          term1 = x + x * x # x = x^2 + x
+    15   2390639  218492645.0     91.4     43.4          output = term1 / term1 + 1 # (x^2 + x) / (x^2 + x + 1)
+    16   2390639   50179426.0     21.0     10.0          return output * xSign # -output if x < 0 else output
+
+Total time: 107.743 s
+File: C:\Users\aaron\CODING\wikiTalk\model.py
+Function: fastForward at line 67
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    67                                               @torch.no_grad()
+    68                                               @profile
+    69                                               def fastForward(self, state, x):
+    70   1195320   78323256.0     65.5      7.3          embedded = self.embedding[x]
+    71   1195320  365433977.0    305.7     33.9          embedded = self.activation.fastForward(embedded)
+    72                                           
+    73   1195320  120890499.0    101.1     11.2          newState = embedded @ self.ih
+    74   1195320  101290376.0     84.7      9.4          newState += state @ self.scaledHH
+    75   1195320   47567646.0     39.8      4.4          newState += self.bias
+    76   1195319  360916578.0    301.9     33.5          newState = self.activation.fastForward(newState)
+    77                                                   
+    78   1195319    3007753.0      2.5      0.3          return newState
+
+Total time: 135.137 s
+File: C:\Users\aaron\CODING\wikiTalk\testEmbedArticle.py
+Function: searchWiki at line 10
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    10                                           @profile
+    11                                           def searchWiki(query: str, model: RNNLanguage, dataFolder: str, totalNumPages = None):
+    12                                               # Tokenize query
+    13         1        191.0    191.0      0.0      queryTokens = tokenize(query) + [sepToken]
+    14                                           
+    15         2        883.0    441.5      0.0      with torch.no_grad():
+    16                                                   # Get text embedding by passing text through model
+    17         1       1273.0   1273.0      0.0          queryState = torch.zeros(model.hiddenDim)
+    18         6      73140.0  12190.0      0.0          for token in tqdm(queryTokens, desc="Getting Embedding"):
+    19         5      12195.0   2439.0      0.0              queryState = model.fastForward(queryState, token)
+    20                                           
+    21                                                   # Normalize queryState
+    22         1       1048.0   1048.0      0.0          queryState /= torch.norm(queryState)
+    23                                           
+    24                                               # Init results
+    25         1          3.0      3.0      0.0      results = []  # [(similarity, pageIndex)]
+    26                                           
+    27                                               # Search
+    28         2        117.0     58.5      0.0      with torch.no_grad():
+    29         1        121.0    121.0      0.0          titleState: torch.Tensor = torch.zeros(model.hiddenDim)
+    30                                           
+    31     56564   54361571.0    961.1      4.0      for fileIndex, pageIndex, titleTokens in tqdm(
+    32         1          9.0      9.0      0.0          loadTitles(dataFolder), desc="Searching Wiki Pages",
+    33         1          3.0      3.0      0.0          total=totalNumPages
+    34                                               ):
+    35    113126    7097178.0     62.7      0.5          with torch.no_grad():
+    36     56563    3608337.0     63.8      0.3              titleState.fill_(0)
+    37   1195315    3619509.0      3.0      0.3              for token in titleTokens:
+    38   1138753 1200611055.0   1054.3     88.8                  titleState = model.fastForward(titleState, token)
+    39     56562   58845968.0   1040.4      4.4              titleState = model.fastForward(titleState, sepToken)
+    40                                           
+    41                                                       # Normalize titleState
+    42     56562   13257108.0    234.4      1.0              titleState /= torch.norm(titleState)
+    43                                           
+    44                                                       # Compute dot product
+    45     56562    6628395.0    117.2      0.5              dot_product = torch.sum(queryState * titleState).item()
+    46                                           
+    47                                                   # Insert result at correct position in results
+    48     56562     143612.0      2.5      0.0          inserted = False
+    49    339357    1683099.0      5.0      0.1          for i, result in enumerate(results):
+    50    282795     982002.0      3.5      0.1              if dot_product > result[0]:
+    51                                                           results.insert(
+    52                                                               i, (dot_product, fileIndex, pageIndex, decode(titleTokens))
+    53                                                           )
+    54                                                           inserted = True
+    55                                                           if len(results) > numResults:
+    56                                                               results.pop()
+    57                                                           break
+    58     56562     444939.0      7.9      0.0          if not inserted and len(results) < numResults:
+    59         5        385.0     77.0      0.0              results.append((dot_product, fileIndex, pageIndex, decode(titleTokens)))
+    60                                           
+    61                                               # Get result pages
+    62                                               print(f"Loading top {numResults} pages...")
+    63                                               resultPages = [(result[1], result[2]) for result in results]
+    64                                               pages = []
+    65                                               for i, (titleTokens, textTokens) in enumerate(loadTokensIndices(dataFolder, resultPages)):
+    66                                                   title = decode(titleTokens)
+    67                                                   text = decode(textTokens)
+    68                                                   print(f"{i}: {title}")
+    69                                                   pages.append(title, text)
+    70                                           
+    71                                               print(f"Finished")
+    72                                               return pages
+
+ 50.33 seconds - C:\Users\aaron\CODING\wikiTalk\model.py:10 - fastForward
+107.74 seconds - C:\Users\aaron\CODING\wikiTalk\model.py:67 - fastForward
+135.14 seconds - C:\Users\aaron\CODING\wikiTalk\testEmbedArticle.py:10 - searchWiki

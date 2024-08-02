@@ -12,7 +12,7 @@ class CustomActivation(torch.autograd.Function):
         xSign = torch.sign(x)
         x = xSign * x # x = abs(x)
         term1 = x + x * x # x = x^2 + x
-        output = term1 / term1 + 1 # (x^2 + x) / (x^2 + x + 1)
+        output = term1 / (term1 + 1) # (x^2 + x) / (x^2 + x + 1)
         return output * xSign # -output if x < 0 else output
 
     @staticmethod
@@ -22,7 +22,7 @@ class CustomActivation(torch.autograd.Function):
         x = xSign * x # x = abs(x)
         ctx.save_for_backward(x)
         term1 = x + x * x # x = x^2 + x
-        output = term1 / term1 + 1 # (x^2 + x) / (x^2 + x + 1)
+        output = term1 / (term1 + 1) # (x^2 + x) / (x^2 + x + 1)
         return output * xSign # -output if x < 0 else output
 
     @staticmethod
@@ -30,7 +30,7 @@ class CustomActivation(torch.autograd.Function):
         x, = ctx.saved_tensors
         term1 = x + 1
         term2 = x * x + term1
-        grad_input = (x + term1) / (term2 * term2)
+        grad_input = (x + term1) / (term2 * term2) # (2x + 1) / ((x^2 + x + 1)^2)
         return grad_input * grad_output
 
 class CustomActivationModule(nn.Module):
