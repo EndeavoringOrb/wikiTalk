@@ -1,6 +1,7 @@
 import torch
 from trainEmbedArticle import RNNLanguage
 from tokenizeWiki import *
+import bisect
 
 from line_profiler import profile
 import os
@@ -24,6 +25,7 @@ def serializeVectors(data, filename):
             f.write(tensor.cpu().numpy().tobytes())
 
 
+@torch.no_grad()
 @profile
 def deserializeVectors(filename):
     with open(filename, "rb") as f:
@@ -33,10 +35,12 @@ def deserializeVectors(filename):
         # Read the length of each tensor
         tensor_length = struct.unpack("!I", f.read(4))[0]
 
+        read_size = tensor_length * 4
+
         # Read each tensor
         for _ in range(num_pairs):
             # Read the tensor data
-            tensor_data = f.read(tensor_length * 4)  # 4 bytes per float32
+            tensor_data = f.read(read_size)  # 4 bytes per float32
             tensor = torch.frombuffer(tensor_data, dtype=torch.float32)
 
             yield tensor
@@ -50,6 +54,7 @@ def loadVectors(folder):
             yield fileIndex, pageIndex, vector
 
 
+@torch.no_grad()
 @profile
 def embedWiki(
     model: RNNLanguage,
@@ -66,8 +71,7 @@ def embedWiki(
     # Write the length of each tensor
     f.write(struct.pack("!I", model.hiddenDim))
 
-    with torch.no_grad():
-        titleState: torch.Tensor = torch.zeros(model.hiddenDim)
+    titleState: torch.Tensor = torch.zeros(model.hiddenDim)
 
     for fileIndex, pageIndex, titleTokens in tqdm(
         loadTitles(dataFolder), desc="Embedding Wiki Pages", total=totalNumPages
@@ -81,55 +85,55 @@ def embedWiki(
             # Write the length of each tensor
             f.write(struct.pack("!I", model.hiddenDim))
 
-        with torch.no_grad():
-            titleState.fill_(0)
-            for token in titleTokens:
-                titleState = model.fastForward(titleState, token)
-            titleState = model.fastForward(titleState, sepToken)
+        titleState.fill_(0)
+        for token in titleTokens:
+            titleState = model.fastForward(titleState, token)
+        titleState = model.fastForward(titleState, sepToken)
 
-            # Normalize titleState
-            invNorm = 1 / torch.norm(titleState)
-            titleState *= invNorm
+        # Normalize titleState
+        invNorm = 1 / torch.norm(titleState)
+        titleState *= invNorm
 
         # Write the tensor data
         f.write(titleState.cpu().numpy().tobytes())
 
 
+@torch.no_grad()
 @profile
 def searchVectorWiki(
-    query: str, model: RNNLanguage, dataFolder: str, vectorDataFolder: str, totalNumPages=None
+    query: str,
+    model: RNNLanguage,
+    dataFolder: str,
+    vectorDataFolder: str,
+    totalNumPages=None,
 ):
+    print(f"Initializing search...")
     # Tokenize query
     queryTokens = tokenize(query) + [sepToken]
 
-    with torch.no_grad():
-        # Get text embedding by passing text through model
-        queryState = torch.zeros(model.hiddenDim)
-        for token in tqdm(queryTokens, desc="Getting Embedding"):
-            queryState = model.fastForward(queryState, token)
+    # Get text embedding by passing text through model
+    queryState = torch.zeros(model.hiddenDim)
+    for token in queryTokens:
+        queryState = model.fastForward(queryState, token)
 
-        # Normalize queryState
-        invNorm = 1 / torch.norm(queryState)
-        queryState *= invNorm
+    # Normalize queryState
+    invNorm = 1 / torch.norm(queryState)
+    queryState *= invNorm
 
     # Init results
     results = []  # [(similarity, pageIndex)]
 
+    print(f"Searching...")
     # Search
-    for fileIndex, pageIndex, titleState in tqdm(
-        loadVectors(vectorDataFolder), desc="Searching Wiki Pages", total=totalNumPages
-    ):
-        with torch.no_grad():
-            # Compute dot product
-            dot_product = torch.sum(queryState * titleState).item()
+    for fileIndex, pageIndex, titleState in loadVectors(vectorDataFolder):
+        # Compute dot product
+        dot_product = torch.sum(queryState * titleState).item()
 
         # Insert result at correct position in results
         inserted = False
         for i, result in enumerate(results):
             if dot_product > result[0]:
-                results.insert(
-                    i, (dot_product, fileIndex, pageIndex)
-                )
+                results.insert(i, (dot_product, fileIndex, pageIndex))
                 inserted = True
                 if len(results) > numResults:
                     results.pop()
@@ -247,5 +251,7 @@ if __name__ == "__main__":
             print("exiting...")
             break
 
-        pages = searchVectorWiki(query, model, dataFolder, vectorDataFolder, totalNumPages)
+        pages = searchVectorWiki(
+            query, model, dataFolder, vectorDataFolder, totalNumPages
+        )
         exit(0)
