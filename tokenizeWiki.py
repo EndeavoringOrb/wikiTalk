@@ -137,7 +137,7 @@ def loadTitles(folder):
             yield fileIndex, pageIndex, titleTokens
 
 def countNumPages(folder):
-    numPages = 0
+    numPages = []
     files = sorted(os.listdir(folder), key=lambda x: int(x.split(".")[0]))
 
     for file in files:
@@ -145,7 +145,7 @@ def countNumPages(folder):
         with open(filename, "rb") as f:
             # Read the number of tuples in this file
             numTuples = struct.unpack("I", f.read(4))[0]
-            numPages += numTuples
+            numPages.append(numTuples)
 
     return numPages
 

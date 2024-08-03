@@ -1,0 +1,4 @@
+vespa for vector search (https://vespa.ai/)
+
+Please implement serialization to binary in python for a list of pytorch tensors.
+The tensors are all one-dimensional vectors, they all have the same length, and they all have a dtype of float32.
