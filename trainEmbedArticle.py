@@ -27,7 +27,8 @@ def getNumPages(folder):
 # vocabChars = sorted(list(set(vocabChars + vocabChars.lower() + vocabChars.upper())))
 # vocabBIG = {character: idx for idx, character in enumerate(vocabChars)}
 
-if __name__ == "__main__":
+#@profile
+def main():
     # Hyperparameters
     vocab_size = len(vocab) + 1  # +1 for separating token between title and text
     hidden_dim = 128
@@ -117,3 +118,7 @@ if __name__ == "__main__":
 
         # Save the trained model
         torch.save(model, modelSavePath)
+
+
+if __name__ == "__main__":
+    main()

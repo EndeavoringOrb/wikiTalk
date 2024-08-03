@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from line_profiler import profile
 import os
-os.environ["LINE_PROFILE"] = "1"
+os.environ["LINE_PROFILE"] = "0"
 
 class CustomActivation(torch.autograd.Function):
     @profile
@@ -77,6 +77,7 @@ class RNNLanguage(nn.Module):
         
         return newState
 
+    @profile
     def forward(self, state, x):
         embedded = self.activation(self.embedding[x])
         newState = self.activation(embedded @ self.ih + state @ (self.hh / (torch.norm(self.hh, dim=1) * self.hiddenDim)) + self.bias)
@@ -95,6 +96,7 @@ class RNNLanguage(nn.Module):
         token = torch.multinomial(probs, 1)
         return token
 
+    @profile
     def logits(self, state):
         return (
             state @ self.embedding.T

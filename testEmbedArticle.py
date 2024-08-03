@@ -130,6 +130,7 @@ def searchVectorWiki(
         dot_product = torch.sum(queryState * titleState).item()
 
         # Insert result at correct position in results
+        # TODO: iterate the other way, then you can stop if any are false
         inserted = False
         for i, result in enumerate(results):
             if dot_product > result[0]:
