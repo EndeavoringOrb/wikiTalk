@@ -1,0 +1,143 @@
+# loss
+dL_dY
+
+# logits: save state
+Y = self.embedding @ state # [dot(state, self.embedding[i]) for i in range(vocabSize)]
+self.embedding[i][j].grad += dL_dY[i] * state[j]
+grad[j] = sum([dL_dY[i] * self.embedding[i][j] for i in range(vocabSize)])
+
+# activation: calculate grad, then save grad
+state = self.activation(middleState)
+grad[j] *= (2 * x + 1) / ((x^2 + x + 1) ^ 2) # x = middleState[j]
+
+# bias
+middleState = ihState + hhState + self.bias
+self.bias[j].grad += grad[j]
+
+# input to hidden
+ihState = embedded @ self.ih # [dot(embedded, self.ih[i]) for i in range(hiddenDim)]
+self.ih[i][j].grad += grad[i] * embedded[j]
+inputGrad[i] = grad[i] * sum([self.ih[i][j] for j in range(hiddenDim)])
+
+# embedding activation
+embedded = self.activation(self.embedding[token])
+self.embedding[token][j].grad += inputGrad[j] * ((2 * x + 1) / ((x^2 + x + 1) ^ 2)) # x = self.embedding[token][j]
+
+# hidden to hidden
+hhState = state @ (self.hh / (torch.norm(self.hh, dim=1) * self.hiddenDim))
+
+hhState[i] = dot(state, self.scaledHH[i])
+self.scaledHH[i] = self.hh[i] * (1 / (hh.norm(i) * hiddenDim))
+
+self.scaledHH[i][j].grad = grad[i] * state[j]
+self.hh[i][j].grad += self.scaledHH[i][j].grad * (-1 / ((hh.norm(i) * hiddenDim) ^ 2)) * (hiddenDim / (2 * hh.norm(i)))
+grad[i] = grad[i] * sum([self.scaledHH[i][j] for j in range(hiddenDim)])
+
+
+# pseudocode for Training
+
+# preCompute
+set embedded = self.activation(self.embedding)
+set embeddingGradMul = ((2 * x + 1) / ((x^2 + x + 1) ^ 2)) # x = self.embedding[i][j] for i,j in self.embedding
+
+set hhMulVals = (1 / (hh.norm(i) * hiddenDim))
+set hhGradRowMul = -1 * (hhMulVals * hhMulVals) * (hiddenDim / (2 * hh.norm(i)))
+set scaledHH = self.hh[i] * hhMulVals[i]
+
+# init
+states = []
+activationGradMuls = []
+
+state = zeros()
+activationGradMul = zeros()
+Y = zeros()
+grad = zeros()
+tempGrad = zeros()
+inputGrad = zeros()
+
+# forward
+for token in (title and text - 1 token):
+    states.append(state) # for hh backward
+
+    for i in range(hiddenDim):
+        stateVal = dot(state, self.scaledHH[i])
+
+        stateVal += dot(embedded[token], self.ih[i])
+
+        stateVal += self.bias[i]
+
+        state[i], activationGradMul[i] = self.activation(stateVal)
+
+    activationGradMuls.append(activationGradMul)
+states.append(state)
+
+# backward
+for tokenIndex in range(len(title and text)-1, -1, -1):
+    if tokenIndex >= len(title):
+        for i in range(vocabSize):
+            Y[i] = dot(states[tokenIndex], self.embedding[i])
+        
+        Y = softmax(Y)
+
+        # grad is (prob - 1) for token, (prob) for all others.
+        # -(1/x) * (x - x*x) = x - 1
+        # 1/(1-x) * (x - x*x) = x
+        Y[tokens[tokenIndex]] -= 1
+
+        for i in range(vocabSize):
+            for j in range(hiddenDim):
+                # embedding grad
+                self.embedding[i][j].grad += dL_dY[i] * state[j]
+
+                # grad += dL_dY through embedding
+                grad[j] += dL_dY[i] * self.embedding[i][j]
+
+    inputGrad.zeros()
+    tempGrad.zeros()
+
+    for i in range(hiddenDim):
+        # grad through activation
+        grad[i] *= activationGradMuls[tokenIndex - 1]
+
+        # bias grad
+        self.bias[i].grad += grad[i]
+
+        for j in range(hiddenDim):
+            # ih grad
+            self.ih[i][j].grad += grad[i] * self.embedded[tokens[tokenIndex - 1]][j]
+
+            # grad through ih
+            inputGrad[j] += grad[i] * self.ih[i][j]
+
+            # hh grad
+            self.hh[i][j].grad += grad[i] * state[j] * hhGradRowMul[i]
+
+            # grad through hh
+            tempGrad[j] += grad[i] * self.scaledHH[i][j]
+    
+    for i in range(hiddenDim):
+        # embedding grad
+        self.embedding[tokens[tokenIndex - 1]][i].grad += inputGrad[i] * embeddingGradMul[tokens[tokenIndex - 1]]
+    
+    grad = tempGrad
+
+
+
+
+    
+
+
+# thoughts
+loss = 0
+state = zeros()
+
+logits = model.logits(state)     # grad += logits.backward(dL_dLogits), save state
+loss += criterion(logits, token) # dL_dLogits
+state = model(state, token)      # grad = model.backward(grad)
+
+logits = model.logits(state)     # grad += logits.backward(dL_dLogits)
+loss += criterion(logits, token) # dL_dLogits
+state = model(state, token)      # grad = model.backward(grad)
+
+logits = model.logits(state)     # grad = logits.backward(dL_dLogits)
+loss += criterion(logits, token) # dL_dLogits

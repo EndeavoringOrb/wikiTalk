@@ -75,7 +75,7 @@ void clearLines(int numLines)
     std::flush(std::cout);
 }
 
-float absFloat(float value)
+inline float absFloat(float value)
 {
     return value < 0.0f ? -value : value;
 }
@@ -85,18 +85,31 @@ struct Matrix
     float *data;
     int rows;
     int cols;
-    int numValues;
+    int numValues = -1;
+
+    Matrix(Matrix &other)
+    {
+        if (numValues != -1)
+        {
+            delete[] data;
+        }
+        rows = other.rows;
+        cols = other.cols;
+        numValues = other.numValues;
+        data = new float[rows * cols];
+        copy(other);
+    }
 
     Matrix(int r, int c) : rows(r), cols(c), numValues(r * c)
     {
-        // data = new float[rows * cols];
+        data = new float[rows * cols];
 
-        size_t size = rows * cols; // Number of floats
+        /*size_t size = rows * cols; // Number of floats
         size_t alignment = 32;
         size_t space = size * sizeof(float) + alignment;
         void *ptr = operator new(space);
         void *aligned_ptr = std::align(alignment, size * sizeof(float), ptr, space);
-        data = static_cast<float *>(aligned_ptr);
+        data = static_cast<float *>(aligned_ptr);*/
 
         zeros();
     }
@@ -162,6 +175,14 @@ struct Matrix
         for (int i = 0; i < numValues; i++)
         {
             data[i] = other.data[i];
+        }
+    }
+
+    void copyRow(Matrix &other, int row)
+    {
+        for (int i = 0; i < cols; i++)
+        {
+            data[row * cols + i] = other.data[i];
         }
     }
 
@@ -923,6 +944,46 @@ struct DataLoader
         return true; // We were able to load a page
     }
 };
+
+uint32_t findLongestSequence(const std::string &folder, const int numFiles)
+{
+    uint32_t maxLength = 0;
+
+    for (int i = 0; i < numFiles; i++)
+    {
+        std::string filename = folder + std::to_string(i) + ".bin";
+        try
+        {
+            std::ifstream file;
+            file.open(filename, std::ios::binary);
+
+            uint32_t numTuples;
+
+            file.read(reinterpret_cast<char *>(&numTuples), sizeof(numTuples));
+
+            for (int j = 0; j < numTuples; j++)
+            {
+                // Read the length of the title and page
+                uint32_t len1, len2;
+                file.read(reinterpret_cast<char *>(&len1), sizeof(len1));
+                file.read(reinterpret_cast<char *>(&len2), sizeof(len2));
+
+                file.seekg(len1 + len2, std::ios::cur);
+
+                maxLength = std::max(maxLength, len1 + len2);
+            }
+
+            file.close();
+        }
+        catch (const std::exception &e)
+        {
+            // If there's an error opening or reading a file, we'll just skip it and continue with the next one
+            std::cerr << "Error processing file " << filename << ": " << e.what() << std::endl;
+        }
+    }
+
+    return maxLength;
+}
 
 struct Clock
 {

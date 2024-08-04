@@ -12,6 +12,17 @@ from tokenizeWiki import loadTokens
 from time import perf_counter
 
 
+"""
+Optimization Log (finish training on 6 pages)
+
+Baseline
+47.09, 42.57, 48.24, 42.05
+
+use preCompute in training loop which precomputes hhScaled and embedded
+17.73, 17.55, 19.20, 20.05, 20.38
+"""
+
+
 def getNumPages(folder):
     with open(f"{folder}/info.txt", "r", encoding="utf-8") as f:
         text = f.read()
@@ -27,7 +38,8 @@ def getNumPages(folder):
 # vocabChars = sorted(list(set(vocabChars + vocabChars.lower() + vocabChars.upper())))
 # vocabBIG = {character: idx for idx, character in enumerate(vocabChars)}
 
-#@profile
+
+@profile
 def main():
     # Hyperparameters
     vocab_size = len(vocab) + 1  # +1 for separating token between title and text
@@ -36,7 +48,7 @@ def main():
     learning_rate = 0.001
 
     # Settings
-    modelSavePath = "models/embedArticle/2.pt"
+    modelSavePath = "models/embedArticle/0.pt"
     tokenFolder = "tokenData"
     totalNumPages = 551_617
 
@@ -45,12 +57,10 @@ def main():
     )  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using {device}")
 
-    # Prepare your data
-    numFiles = len(os.listdir(tokenFolder))
-
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
     model = RNNLanguage(vocab_size, hidden_dim).to(device)
+    # model = torch.compile(og_model)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     print(f"Hidden Dim: {hidden_dim:,}")
@@ -77,6 +87,9 @@ def main():
             # zero model grad
             optimizer.zero_grad()
 
+            # preCompute
+            model.preCompute()
+
             # Get text embedding by passing text through model
             state = torch.zeros(model.hiddenDim, device=device)
             for token in tqdm(titleTokens, desc="Getting Embedding"):
@@ -93,7 +106,7 @@ def main():
             for token in tqdm(textTensor, desc="Reconstructing"):
                 logits = model.logits(state)  # get logits
                 loss += criterion(logits, token)  # accumulate loss
-                state = model(state, token)  # get next state
+                state = model.forwardEmbedded(state, token)  # get next state
 
             # Backpropogation
             print("Doing backpropagation...")
@@ -111,6 +124,10 @@ def main():
             # Save the trained model
             print("Saving model...")
             torch.save(model, modelSavePath)
+
+            # Exit after 5 pages for benchmarking purposes
+            # if stepNum == 5:
+            #     exit(0)
 
             clearLines(5)
 

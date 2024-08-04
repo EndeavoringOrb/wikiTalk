@@ -136,6 +136,36 @@ def loadTitles(folder):
         for pageIndex, titleTokens in read_compact_data_titles(f"{folder}/{file}"):
             yield fileIndex, pageIndex, titleTokens
 
+
+def getPage(titleTokens, folder):
+    # First, find the file and page index
+    fileIndex, pageIndex = findFileAndPageIndex(titleTokens, folder)
+
+    if fileIndex is None or pageIndex is None:
+        return None  # Page not found
+
+    # Construct the filename
+    filename = f"{folder}/{fileIndex}.bin"
+
+    # Use read_compact_data_indices to get the page
+    for inner_list1, inner_list2 in read_compact_data_indices(filename, [pageIndex]):
+        return inner_list1, inner_list2
+
+    return None  # This should not happen if the index was correct
+
+
+def findFileAndPageIndex(titleTokens, folder):
+    files = sorted(os.listdir(folder), key=lambda x: int(x.split(".")[0]))
+
+    for fileIndex, file in enumerate(files):
+        filename = f"{folder}/{file}"
+        for pageIndex, pageTitleTokens in read_compact_data_titles(filename):
+            if pageTitleTokens == titleTokens:
+                return fileIndex, pageIndex
+
+    return None, None  # Page not found
+
+
 def countNumPages(folder):
     numPages = []
     files = sorted(os.listdir(folder), key=lambda x: int(x.split(".")[0]))
@@ -149,8 +179,40 @@ def countNumPages(folder):
 
     return numPages
 
+
+def countNumTokens(folder):
+    total_tokens = 0
+    files = sorted(os.listdir(folder), key=lambda x: int(x.split(".")[0]))
+
+    for file in files:
+        filename = f"{folder}/{file}"
+        total_tokens += countTokensInFile(filename)
+
+    return total_tokens
+
+
+def countTokensInFile(filename):
+    file_tokens = 0
+    with open(filename, "rb") as f:
+        # Read the number of tuples
+        num_tuples = struct.unpack("I", f.read(4))[0]
+
+        for _ in range(num_tuples):
+            # Read the length of each inner list
+            len1, len2 = struct.unpack("II", f.read(8))
+
+            # Add the lengths to the token count
+            file_tokens += len1 + len2
+
+            # Skip the actual data
+            f.seek(len1 + len2, 1)  # 1 means relative to current position
+
+    return file_tokens
+
+
 def tokenize(text):
     return [charToToken[character] for character in text]
+
 
 def decode(tokens):
     return "".join([tokenToChar[token] for token in tokens])
@@ -160,9 +222,8 @@ charToToken = {
     character: idx for idx, character in enumerate(sorted(list(vocab.vocab)))
 }
 
-tokenToChar = {
-    idx: character for character, idx in charToToken.items()
-}
+tokenToChar = {idx: character for character, idx in charToToken.items()}
+
 
 def main():
     wikiFolder = "wikiData"

@@ -229,7 +229,7 @@ def searchWiki(query: str, model: RNNLanguage, dataFolder: str, totalNumPages=No
 if __name__ == "__main__":
     # Initialize stuff
     print("Loading model...")
-    model: RNNLanguage = torch.load("models/embedArticle/2.pt", weights_only=False)
+    model: RNNLanguage = torch.load("models/embedArticle/1.pt", weights_only=False)
     model.preCompute()
 
     sepToken = len(charToToken)
