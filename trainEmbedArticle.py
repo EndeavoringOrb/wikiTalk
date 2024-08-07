@@ -13,31 +13,11 @@ from tokenizeWiki import loadTokens, loadTitles, countNumTokens
 from time import perf_counter
 
 
-"""
-Optimization Log (finish training on 6 pages)
-
-Baseline
-47.09, 42.57, 48.24, 42.05
-
-use preCompute in training loop which precomputes hhScaled and embedded
-17.73, 17.55, 19.20, 20.05, 20.38
-"""
-
-
 def getNumPages(folder):
     with open(f"{folder}/info.txt", "r", encoding="utf-8") as f:
         text = f.read()
         numPages = int(text.split(" ")[0].strip())
     return numPages
-
-
-# Create vocab
-# vocabChars = "abcdefghijklmnopqrstuvwxyz0123456789 ():.-'\",/?!&"
-# vocabChars += "éöōáíüłçóèäńøæãðūëòà+ñ̇ğâāå♯żαđúćıʼęìň×ạấýσêš½ŵôčąőδḥ*șśşʻïăēþîọīřț—ž¡²ṛķņœễěβõếû…ß°ṯṟμ"
-# vocabChars += "źπṅảʽẩầứồươệļģỏ′ė­ṃů@=ÿ″ǫ̨ħ−ǂǃŭŝĵĥĝĉƒùť$ụĩũŏ%ṣủẹəỳữ£ǐľʿǁġṇ­­­­­­ṭ高雄ḫ道⅓∞űởờ¹^ỉ₂ḍḷ\\ẻʾį³ɛ̃ỹậộꞌʹ"
-# vocabChars += "ǀị;∴~κắċ̄±ṉųớợằ–·→ố⟨⟩京東ďỗửừḵẫ₀ĕŷự꞉•"
-# vocabChars = sorted(list(set(vocabChars + vocabChars.lower() + vocabChars.upper())))
-# vocabBIG = {character: idx for idx, character in enumerate(vocabChars)}
 
 
 @profile
@@ -52,7 +32,6 @@ def main():
     modelSavePath = "models/embedArticle/0"
     saveInterval = 10
     tokenFolder = "tokenData"
-    totalNumPages = 551_617
 
     device = torch.device(
         "cpu"
@@ -61,8 +40,11 @@ def main():
 
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
-    model = RNNEmbedder(vocabSize, hiddenDim).to(device)
-    # model = torch.compile(og_model)
+    model: RNNEmbedder = torch.load(
+        f"{modelSavePath}/model.pt", map_location=device, weights_only=False
+    )
+    # model = RNNEmbedder(vocabSize, hiddenDim).to(device)
+
     optimizer = optim.Adam(model.parameters(), lr=learningRate)
     print(f"Hidden Dim: {hiddenDim:,}")
     print(f"# Embedding Params: {vocabSize * hiddenDim:,}")
@@ -76,7 +58,7 @@ def main():
     # Get all titles
     print(f"Getting all titles...")
     titles = []
-    for fileIndex, pageIndex, titleTokens in loadTitles(tokenFolder):
+    for _, _, titleTokens in loadTitles(tokenFolder):
         titles.append(titleTokens)
     clearLines(1)
     print(f"Loaded {len(titles):,} titles")
@@ -117,7 +99,7 @@ def main():
 
         for stepNum, (titleTokens, textTokens) in enumerate(loadTokens(tokenFolder)):
             print(
-                f"Epoch [{epoch+1}/{numEpochs}], Step [{stepNum + 1}/{totalNumPages}], Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
+                f"Epoch [{epoch+1}/{numEpochs}], Step [{stepNum + 1}/{numPagesPerEpoch}], Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
             )
             start = perf_counter()
             # zero model grad
