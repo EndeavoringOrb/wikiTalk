@@ -181,14 +181,18 @@ def countNumPages(folder):
 
 
 def countNumTokens(folder):
-    total_tokens = 0
+    numPages = 0
+    numTokens = 0
+
     files = sorted(os.listdir(folder), key=lambda x: int(x.split(".")[0]))
 
     for file in files:
         filename = f"{folder}/{file}"
-        total_tokens += countTokensInFile(filename)
+        fileNumPages, fileNumTokens = countTokensInFile(filename)
+        numPages += fileNumPages
+        numTokens += fileNumTokens
 
-    return total_tokens
+    return numPages, numTokens
 
 
 def countTokensInFile(filename):
@@ -207,7 +211,7 @@ def countTokensInFile(filename):
             # Skip the actual data
             f.seek(len1 + len2, 1)  # 1 means relative to current position
 
-    return file_tokens
+    return num_tuples, file_tokens
 
 
 def tokenize(text):

@@ -96,20 +96,27 @@ struct Matrix
         rows = other.rows;
         cols = other.cols;
         numValues = other.numValues;
-        data = new float[rows * cols];
+
+        size_t size = rows * cols; // Number of floats
+        size_t alignment = 32;
+        size_t space = size * sizeof(float) + alignment;
+        void *ptr = operator new(space);
+        void *aligned_ptr = std::align(alignment, size * sizeof(float), ptr, space);
+        data = static_cast<float *>(aligned_ptr);
+
         copy(other);
     }
 
     Matrix(int r, int c) : rows(r), cols(c), numValues(r * c)
     {
-        data = new float[rows * cols];
+        // data = new float[rows * cols];
 
-        /*size_t size = rows * cols; // Number of floats
+        size_t size = rows * cols; // Number of floats
         size_t alignment = 32;
         size_t space = size * sizeof(float) + alignment;
         void *ptr = operator new(space);
         void *aligned_ptr = std::align(alignment, size * sizeof(float), ptr, space);
-        data = static_cast<float *>(aligned_ptr);*/
+        data = static_cast<float *>(aligned_ptr);
 
         zeros();
     }

@@ -1,16 +1,16 @@
 from scipy.optimize import minimize
 import numpy as np
 
-x = np.linspace(-1, 1, 30)
+x = np.linspace(0, 0.5, 100000)
 y = np.exp(x)
-
 
 def objective_function(params):
     a1, a2, a3, a4, a5 = params
-    return np.sum((y - (a1 * x + a2 * x**2 + a3 * x**3 + a4 * x**4 + a5)) ** 2)
+    pred = a1 + a2 * x + a3 * x ** 2 + a4 * x ** 3 + a5 * x ** 4
+    loss = np.sum((y - pred) ** 2)
+    return loss
 
-
-initial_guess = [1, 0.5, 0.17, 0.04, 1]
+initial_guess = [1, 1, 1, 1, 1]
 result = minimize(objective_function, initial_guess)
 
 print("Best parameters:", result.x)

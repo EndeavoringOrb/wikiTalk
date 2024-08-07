@@ -20,14 +20,27 @@ class CustomActivation(torch.autograd.Function):
     @staticmethod
     @profile
     def forward(ctx, x):
-        xSign = torch.sign(x)
+        xAbs = torch.abs(x)
+
+        term1 = xAbs + 1 # x + 1
+        term2 = 1 / (xAbs.square() + term1) # 1 / (x^2 + x + 1)
+
+        xAbs = (xAbs + term1) * term2 * term2 # (2x + 1) / ((x^2 + x + 1)^2)
+        ctx.save_for_backward(xAbs)
+
+        xAbs = 1 - term2 # 1 - (1 / (x^2 + x + 1))
+
+        return xAbs.copysign(x)
+
+
+        """xSign = torch.sign(x)
         x = xSign * x  # x = abs(x)
         term1 = x + 1
         term2 = x * x + term1  # x^2 + x + 1
         grad = (x + term1) / (term2 * term2)  # (2x + 1) / ((x^2 + x + 1)^2)
         ctx.save_for_backward(grad)
         output = (term2 - 1) / (term2)  # (x^2 + x) / (x^2 + x + 1)
-        return output * xSign  # -output if x < 0 else output
+        return output * xSign  # -output if x < 0 else output"""
 
     @staticmethod
     @profile
@@ -128,41 +141,14 @@ class RNNLanguage(nn.Module):
 
 # Define the RNN model
 class RNNEmbedder(nn.Module):
-    def __init__(self, vocabSize, embeddingDim, hiddenDim):
+    def __init__(self, vocabSize, hiddenDim):
         super(RNNEmbedder, self).__init__()
-        self.embedding = nn.Embedding(vocabSize, hiddenDim)
-
-        self.ih = nn.Linear(hiddenDim, hiddenDim)
-        self.hh = nn.Linear(hiddenDim, hiddenDim)
-
-        self.fc = nn.Linear(hiddenDim, embeddingDim)
-
-        self.activation = nn.Tanh()
+        self.titleModel = RNNLanguage(vocabSize, hiddenDim)
+        self.textModel = RNNLanguage(vocabSize, hiddenDim)
 
         self.vocabSize = vocabSize
-        self.embeddingDim = embeddingDim
         self.hiddenDim = hiddenDim
-
-    def forward(self, x):
-        embedded = self.embedding(x)
-        hiddenState = torch.zeros(self.hiddenDim)
-        for embedding in embedded:
-            hiddenState = self.activation(self.ih(embedding) + self.hh(hiddenState))
-        return self.fc(hiddenState)
-
-    @torch.no_grad()
-    def getSimilarity(self, query, title):
-        # Get embeddings
-        embedding1 = self.forward(query)
-        embedding2 = self.forward(title)
-
-        # Compute dot product
-        dot_product = torch.sum(embedding1 * embedding2)
-
-        # Normalize
-        length1 = torch.norm(embedding1)
-        length2 = torch.norm(embedding2)
-
-        dot_product /= length1 * length2
-
-        return dot_product
+    
+    def preCompute(self):
+        self.titleModel.preCompute()
+        self.textModel.preCompute()

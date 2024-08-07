@@ -12,6 +12,8 @@
 
 #include "trainRNNStructs.hpp"
 
+const float e = 2.71828182845904523536028747135266249775724709369995;
+
 struct AdamOptimizer
 {
     int nParams;
@@ -69,35 +71,134 @@ struct AdamOptimizer
 
 float dot(Matrix &vector, Matrix &matrix, int row)
 {
-    float dotVal = 0.0f;
-    for (int i = 0; i < vector.numValues; i++)
+    const float *a = &vector.data[0];
+    const float *b = &matrix.data[row * matrix.cols];
+
+    __m256 sum = _mm256_setzero_ps();
+
+    int i = 0;
+    for (; i <= matrix.cols - 8; i += 8)
     {
-        dotVal += vector.data[i] * matrix.data[row * matrix.cols + i];
+        __m256 va = _mm256_load_ps(a + i);
+        __m256 vb = _mm256_load_ps(b + i);
+        sum = _mm256_add_ps(sum, _mm256_mul_ps(va, vb));
     }
+
+    float result[8];
+    _mm256_storeu_ps(result, sum);
+    const float dotVal = result[0] + result[1] + result[2] + result[3] + result[4] + result[5] + result[6] + result[7];
+
     return dotVal;
 }
 
 float dot(Matrix &matrix0, int row0, Matrix &matrix1, int row1)
 {
     const int numCols = matrix0.cols;
-    float dotVal = 0.0f;
-    for (int i = 0; i < numCols; i++)
+    const float *a = &matrix0.data[row0 * numCols];
+    const float *b = &matrix1.data[row1 * numCols];
+
+    __m256 sum = _mm256_setzero_ps();
+
+    int i = 0;
+    for (; i <= numCols - 8; i += 8)
     {
-        dotVal += matrix0.data[row0 * numCols + i] * matrix1.data[row1 * numCols + i];
+        __m256 va = _mm256_load_ps(a + i);
+        __m256 vb = _mm256_load_ps(b + i);
+        sum = _mm256_add_ps(sum, _mm256_mul_ps(va, vb));
     }
+
+    float result[8];
+    _mm256_storeu_ps(result, sum);
+    const float dotVal = result[0] + result[1] + result[2] + result[3] + result[4] + result[5] + result[6] + result[7];
+
     return dotVal;
 }
 
+// Multiplies row of matrix by mulVal and adds the result to outRow of out
+void vecMulAdd(const float mulVal, Matrix &matrix, int row, Matrix &out, int outRow)
+{
+    // std::cout << "vecMulAdd" << std::endl;
+    const int numCols = matrix.cols;
+    const float *a = &matrix.data[row * numCols];
+    float *b = &out.data[outRow * numCols];
+
+    __m256 val = _mm256_set1_ps(mulVal);
+
+    for (int i = 0; i <= numCols - 8; i += 8)
+    {
+        __m256 va = _mm256_load_ps(a + i);
+        __m256 vb = _mm256_load_ps(b + i);
+        __m256 result = _mm256_fmadd_ps(va, val, vb);
+        _mm256_store_ps(b + i, result);
+    }
+}
+
+// assumes x is in the range (-inf, 0]
 float fastExp(float x)
 {
-    float val = 0.99769329 * x;
-    float xMul = x * x;
-    val += 0.49927523 * xMul;
-    xMul *= x;
-    val += 0.17673903 * xMul;
-    xMul *= x;
-    val += 0.0437114 * xMul;
-    return val + 1.00003652;
+    int n = trunc(x) - 1;    // this will be off by 1 if x is exactly equal to an integer, but that's pretty unlikely and floor() is slow so who cares
+    float remainder = x - n; // a number [0, 1)
+
+    // val = e ^ n
+    float val = 1.0f;
+    for (int i = 0; i < -n; i++)
+    {
+        val *= e;
+    }
+    val = 1.0f / val;
+
+    // approximate (e ^ remainder), then
+    // val = val * (e ^ remainder)
+    if (remainder < 0.5f)
+    {
+        if (remainder < 0.25f)
+        {
+            if (remainder < 0.125f)
+            {
+                return val * (1.06491075 * remainder + 0.99863083);
+            }
+            else
+            {
+                return val * (1.20670246 * remainder + 0.98075915);
+            }
+        }
+        else
+        {
+            if (remainder < 0.375f)
+            {
+                return val * (1.36737327 * remainder + 0.94042401);
+            }
+            else
+            {
+                return val * (1.54943692 * remainder + 0.87196039);
+            }
+        }
+    }
+    else
+    {
+        if (remainder < 0.75f)
+        {
+            if (remainder < 0.875f)
+            {
+                return val * (1.75574186 * remainder + 0.76859292);
+            }
+            else
+            {
+                return val * (1.98951581 * remainder + 0.62224061);
+            }
+        }
+        else
+        {
+            if (remainder < 0.625f)
+            {
+                return val * (2.25441616 * remainder + 0.42328938);
+            }
+            else
+            {
+                return val * (2.55458771 * remainder + 0.16032663);
+            }
+        }
+    }
 }
 
 struct TrainRNN
@@ -117,7 +218,7 @@ struct TrainRNN
 
     Matrix embedded;
     Matrix embeddingGradMul;
-    Matrix embeddingRowSums;
+    float maxYVal;
 
     Matrix hhMulVals;
     Matrix hhGradRowMul;
@@ -139,7 +240,6 @@ struct TrainRNN
           embeddingGrad(_vocabSize, _hiddenDim),
           embedded(_vocabSize, _hiddenDim),
           embeddingGradMul(_vocabSize, _hiddenDim),
-          embeddingRowSums(1, _vocabSize),
 
           hh(_hiddenDim, _hiddenDim),
           hhGrad(_hiddenDim, _hiddenDim),
@@ -188,13 +288,15 @@ struct TrainRNN
         }
 
         // set embeddingRowSums
+        maxYVal = -INFINITY;
         for (int i = 0; i < vocabSize; i++)
         {
-            embeddingRowSums.data[i] = 0.0f;
+            float sumVal = 0.0f;
             for (int j = 0; j < hiddenDim; j++)
             {
-                embeddingRowSums.data[i] += embedding.data[i * hiddenDim + j];
+                sumVal += embedding.data[i * hiddenDim + j];
             }
+            maxYVal = std::max(maxYVal, sumVal);
         }
 
         // set hhMulVals & hhGradRowMul
@@ -255,7 +357,8 @@ struct TrainRNN
                 Y.data[i] = dot(states, tokenIndex, embedding, i);
             }
 
-            softmax(Y);
+            // softmax(Y);
+            softmaxY();
 
             const float tokenProb = Y.data[token];
             lossVal = -log(tokenProb);
@@ -293,6 +396,20 @@ struct TrainRNN
             // bias grad
             biasGrad.data[i] += grad.data[i];
 
+            const float hhMulVal = grad.data[i] * hhGradRowMul.data[i];
+
+            // ih grad
+            // vecMulAdd(grad.data[i], embedded, prevToken * hiddenDim, ihGrad, i);
+
+            // grad through ih
+            // vecMulAdd(grad.data[i], ih, i, inputGrad, 0);
+
+            // hh grad
+            // vecMulAdd(hhMulVal, states, prevTokenIndex, hhGrad, i);
+
+            // grad through hh
+            // vecMulAdd(grad.data[i], scaledHH, i, tempGrad, 0);
+
             for (int j = 0; j < hiddenDim; j++)
             {
                 // ih grad
@@ -302,7 +419,7 @@ struct TrainRNN
                 inputGrad.data[j] += grad.data[i] * ih.data[i * hiddenDim + j];
 
                 // hh grad
-                hhGrad.data[i * hiddenDim + j] += grad.data[i] * states.data[prevTokenIndex * hiddenDim + j] * hhGradRowMul.data[i];
+                hhGrad.data[i * hiddenDim + j] += hhMulVal * states.data[prevTokenIndex * hiddenDim + j];
 
                 // grad through hh
                 tempGrad.data[j] += grad.data[i] * scaledHH.data[i * hiddenDim + j];
@@ -313,6 +430,9 @@ struct TrainRNN
         {
             // embedding grad
             embeddingGrad.data[prevToken * hiddenDim + i] += inputGrad.data[i] * embeddingGradMul.data[prevToken * hiddenDim + i];
+
+            // grad through hh
+            grad.data[i] = tempGrad.data[i];
         }
 
         return lossVal;
@@ -324,7 +444,7 @@ struct TrainRNN
         float sumExp = 0.0f;
         for (int i = 0; i < vocabSize; i++)
         {
-            const float val = std::exp(Y.data[i] - embeddingRowSums.data[i]);
+            const float val = std::exp(Y.data[i] - maxYVal);
             sumExp += val;
             Y.data[i] = val;
         }
@@ -382,6 +502,51 @@ struct TrainRNN
     }
 };
 
+// Serialize RNNLanguageModel to a file
+void serializeTrainRNN(const TrainRNN &model, const std::string &filename)
+{
+    std::ofstream out(filename, std::ios::binary);
+    if (!out)
+    {
+        std::cerr << "Error: Unable to open file for writing: " << filename << std::endl;
+        return;
+    }
+
+    out.write(reinterpret_cast<const char *>(&model.vocabSize), sizeof(int));
+    out.write(reinterpret_cast<const char *>(&model.hiddenDim), sizeof(int));
+
+    serializeMatrix(out, model.embedding);
+    serializeMatrix(out, model.ih);
+    serializeMatrix(out, model.hh);
+    serializeMatrix(out, model.bias);
+
+    out.close();
+}
+
+// Deserialize RNNLanguageModel from a file
+void deserializeTrainRNN(const std::string &filename, TrainRNN &model)
+{
+    std::ifstream in(filename, std::ios::binary);
+    if (!in)
+    {
+        std::cerr << "Error: Unable to open file for reading: " << filename << std::endl;
+        exit(0);
+    }
+
+    int vocabSize;
+    int hiddenDim;
+
+    in.read(reinterpret_cast<char *>(&vocabSize), sizeof(int));
+    in.read(reinterpret_cast<char *>(&hiddenDim), sizeof(int));
+
+    deserializeMatrix(in, model.embedding);
+    deserializeMatrix(in, model.ih);
+    deserializeMatrix(in, model.hh);
+    deserializeMatrix(in, model.bias);
+
+    in.close();
+}
+
 int main()
 {
     // Model parameters
@@ -389,7 +554,7 @@ int main()
     constexpr int hiddenDim = 32;
 
     // Learning parameters
-    float learningRate = 0.001f;
+    float learningRate = 0.0001f;
     float beta1 = 0.9f;
     float beta2 = 0.999f;
     int numEpochs = 1;
@@ -506,15 +671,7 @@ int main()
                 tokensPerSecond = (int)((float)page.textSize / (clock.getElapsedTime() + timeElapsed));
 
                 // Save model
-                // serializeRNNLanguageModel(model, savePath);
-
-                // std::cout << tokensPerSecond << std::endl;
-                // exit(0);
-
-                if (k == 64)
-                {
-                    exit(0);
-                }
+                serializeTrainRNN(model, savePath);
 
                 // Clear text
                 clearLines(3);
