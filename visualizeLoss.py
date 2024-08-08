@@ -36,7 +36,7 @@ plt.plot(
 # Customize the plot
 plt.title("Loss vs. Pages Trained On")
 plt.xlabel("Number of Pages Trained On")
-plt.ylabel("Loss")
+plt.ylabel("Loss [-2, 2] (lower is better)")
 
 # Add grid lines
 plt.grid(True, linestyle="--", alpha=0.7)
