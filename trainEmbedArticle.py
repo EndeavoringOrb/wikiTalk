@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import torch
 import random
 import torch.nn as nn
@@ -25,8 +26,9 @@ def main():
     # Hyperparameters
     vocabSize = len(vocab)
     hiddenDim = 128
-    numEpochs = 100
+    numEpochs = 1_000_000
     learningRate = 0.001
+    batchSize = 32
 
     # Settings
     modelSavePath = "models/embedArticle/0"
@@ -36,16 +38,24 @@ def main():
     device = torch.device(
         "cpu"
     )  # torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using {device}")
+
+    print(f"Training Parameters:")
+    print(f"# of Epochs: {numEpochs:,}")
+    print(f"Learning Rate: {learningRate:,}")
+    print(f"Batch Size: {batchSize:,}")
+    print(f"Training Device: {device}")
+    print()
 
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
-    model: RNNEmbedder = torch.load(
-        f"{modelSavePath}/model.pt", map_location=device, weights_only=False
-    )
-    # model = RNNEmbedder(vocabSize, hiddenDim).to(device)
-
+    # model: RNNEmbedder = torch.load(
+    #    f"{modelSavePath}/model.pt", map_location=device, weights_only=False
+    # )
+    model = RNNEmbedder(vocabSize, hiddenDim).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learningRate)
+    clearLines(1)
+    print(f"Model Parameter Information:")
+    print(f"Vocab Size: {vocabSize:,}")
     print(f"Hidden Dim: {hiddenDim:,}")
     print(f"# Embedding Params: {vocabSize * hiddenDim:,}")
     print(f"# Input->Hidden Params: {hiddenDim * hiddenDim:,}")
@@ -54,9 +64,10 @@ def main():
     print(
         f"Total # Params: {vocabSize * hiddenDim + 2 * hiddenDim * hiddenDim + hiddenDim:,}"
     )
+    print()
 
     # Get all titles
-    print(f"Getting all titles...")
+    print(f"Loading all page titles...")
     titles = []
     for _, _, titleTokens in loadTitles(tokenFolder):
         titles.append(titleTokens)
@@ -97,11 +108,136 @@ def main():
         numPages = 0
         numTokens = 0
 
-        for stepNum, (titleTokens, textTokens) in enumerate(loadTokens(tokenFolder)):
+        tokenLoader = loadTokens(tokenFolder)
+
+        numBatches = int(math.ceil(numPagesPerEpoch / batchSize))
+
+        titleStates = torch.zeros(batchSize, hiddenDim)
+        otherTitleStates = torch.zeros(batchSize, hiddenDim)
+        articleStates = torch.zeros(batchSize, hiddenDim)
+
+        for stepNum in range(numBatches):
+            print(
+                f"Epoch [{epoch+1}/{numEpochs}], Batch [{stepNum + 1}/{numBatches}], Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
+            )
+            start = perf_counter()
+            batch = []
+            adjustedBatchSize = min(batchSize, numPagesPerEpoch - numPages)
+            for i in range(adjustedBatchSize):
+                batch.append(next(tokenLoader))
+            numPages += adjustedBatchSize
+            stepNum += 1
+
+            # sort batch by article length, and get lengths
+            batch = sorted(batch, key=lambda x: len(x[1]), reverse=False)
+            lengths = [len(item[1]) for item in batch]
+            lengths.insert(0, 0)
+
+            # Prepare for forward pass
+            optimizer.zero_grad()  # Zero all gradients in the model
+            model.preCompute()  # Pre-Compute variables for a faster forward pass
+
+            # Reset the states
+            titleStates = titleStates.detach()
+            otherTitleStates = otherTitleStates.detach()
+            articleStates = articleStates.detach()
+
+            # Non-batched processing of titles cause titles are short
+            for i in trange(adjustedBatchSize, desc="Getting Title Embeddings"):
+                # Get text embedding for title
+                state = torch.zeros(model.hiddenDim, device=device)
+                for token in batch[i][0]:
+                    state = model.titleModel.forwardEmbedded(state, token)
+                titleStates[i] = state
+
+                # Get random "wrong" title that is not equal to correct title
+                otherTitleTokens = random.choice(titles)
+                while otherTitleTokens == batch[i][0]:
+                    otherTitleTokens = random.choice(titles)
+
+                # Get text embedding for "wrong" title
+                otherState = torch.zeros(model.hiddenDim, device=device)
+                for token in otherTitleTokens:
+                    otherState = model.titleModel.forwardEmbedded(otherState, token)
+                otherTitleStates[i] = otherState
+
+            # Batch process articles
+            with tqdm(total=lengths[-1], desc="Getting Article Embeddings") as pbar:
+                for i in range(len(lengths) - 1):
+                    for j in range(lengths[i], lengths[i + 1]):
+                        tokens = [item[1][j] for item in batch[i:]]
+                        tokens = torch.tensor(tokens, device=device, dtype=torch.int64)
+                        newArticleStates = model.textModel.forwardEmbedded(
+                            articleStates[i:], tokens
+                        )
+                        articleStates = torch.cat(
+                            [articleStates[:i], newArticleStates], dim=0
+                        )
+                    pbar.update(lengths[i + 1] - lengths[i])
+
+            # Normalize embeddings
+            titleStates = titleStates * (
+                1 / titleStates.norm(dim=-1).unsqueeze(-1)
+            )  # correct title
+            otherTitleStates = otherTitleStates * (
+                1 / otherTitleStates.norm(dim=-1).unsqueeze(-1)
+            )  # wrong title
+            articleStates = articleStates * (
+                1 / articleStates.norm(dim=-1).unsqueeze(-1)
+            )  # article
+
+            # Get dot products
+            correctDot = torch.sum(titleStates * articleStates, dim=-1)
+            wrongDot = torch.sum(otherTitleStates * articleStates, dim=-1)
+
+            # Get loss (best possible loss value is 0)
+            # minimize wrong dot, maximize correctDot
+            loss = wrongDot - correctDot  # [-2, 2]
+            loss = (-2 - loss) ** 2  # [0, 16]
+            loss = loss[
+                :adjustedBatchSize
+            ]  # if we are on the last batch, we only use part of the states
+            loss = torch.mean(loss)
+
+            # Backpropogation
+            print("Doing backpropagation...")
+            loss.backward()
+            optimizer.step()
+
+            # Track loss and numPages
+            stop = perf_counter()
+            lossValue = loss.item()
+            totalLoss += lossValue
+            lastLoss = lossValue
+            windowLoss += lossValue
+            windowSteps += 1
+            numPages += 1
+
+            batchNumTokens = sum([len(item[0]) + len(item[1]) for item in batch])
+            lastTokSec = int(batchNumTokens / (stop - start))
+            numTokens += batchNumTokens
+
+            # Save the trained model
+            if stepNum % saveInterval == 0:
+                print("Saving model...")
+                torch.save(model, f"{modelSavePath}/model.pt")
+                with open(f"{modelSavePath}/loss.txt", "a", encoding="utf-8") as f:
+                    f.write(
+                        f"{epoch * numPagesPerEpoch + stepNum}, {epoch * numTokensPerEpoch + numTokens}, {windowLoss / windowSteps}\n"
+                    )
+                windowLoss = 0
+                windowSteps = 0
+                clearLines(1)
+
+            # Clear logging so we are ready for the next step
+            clearLines(4)
+
+        """for stepNum, (titleTokens, textTokens) in enumerate(loadTokens(tokenFolder)):
             print(
                 f"Epoch [{epoch+1}/{numEpochs}], Step [{stepNum + 1}/{numPagesPerEpoch}], Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
             )
             start = perf_counter()
+
             # zero model grad
             optimizer.zero_grad()
 
@@ -136,8 +272,10 @@ def main():
             correctDot = torch.sum(state * articleState)
             wrongDot = torch.sum(otherState * articleState)
 
-            # Get loss (best value is -2, worst value is 2)
-            loss = wrongDot - correctDot  # minimize wrong dot, maximize correctDot
+            # Get loss (best possible loss value is 0)
+            # minimize wrong dot, maximize correctDot
+            loss = wrongDot - correctDot  # [-2, 2]
+            loss = (-2 - loss) ** 2  # [0, 16]
 
             # Backpropogation
             print("Doing backpropagation...")
@@ -167,11 +305,11 @@ def main():
                 windowSteps = 0
                 clearLines(1)
 
-            # Exit after N pages for benchmarking purposes
-            # if stepNum == 19:
-            #   exit(0)
-
             clearLines(5)
+
+            # Exit after N pages for benchmarking purposes
+            if stepNum == 9:
+                break"""
 
         print(f"Epoch [{epoch+1}/{numEpochs}], Loss: {totalLoss/numPages:.4f}")
 

@@ -1,5 +1,5 @@
 import torch
-from trainEmbedArticle import RNNLanguage
+from trainEmbedArticle import RNNLanguage, RNNEmbedder
 from tokenizeWiki import *
 import bisect
 
@@ -302,8 +302,24 @@ def loadWiki(vectorDataFolder):
 if __name__ == "__main__":
     # Initialize stuff
     print("Loading model...")
-    model: RNNLanguage = torch.load("models/embedArticle/2.pt", weights_only=False)
+    model: RNNEmbedder = torch.load("models/embedArticle/0/model.pt", weights_only=False)
     model.preCompute()
+
+    print("titleModel norms")
+
+    print(model.titleModel.embedding.norm())
+    print(model.titleModel.ih.norm())
+    print(model.titleModel.hh.norm())
+    print(model.titleModel.bias.norm())
+
+    print("textModel norms")
+
+    print(model.textModel.embedding.norm())
+    print(model.textModel.ih.norm())
+    print(model.textModel.hh.norm())
+    print(model.textModel.bias.norm())
+
+    exit(0)
 
     sepToken = len(charToToken)
 

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from line_profiler import profile
 import os
 
-os.environ["LINE_PROFILE"] = "0"
+os.environ["LINE_PROFILE"] = "1"
 
 
 class CustomActivation(torch.autograd.Function):

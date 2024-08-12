@@ -2,3 +2,143 @@ vespa for vector search (https://vespa.ai/)
 
 Please implement serialization to binary in python for a list of pytorch tensors.
 The tensors are all one-dimensional vectors, they all have the same length, and they all have a dtype of float32.
+
+
+P(A|B) = P(A and B) / P(B)
+
+<start>CAAR<end>
+<start>HAT<end>
+
+P(something) = # of sequences it occurs in / # of sequences it could occur in
+
+P(0<start>) = 2/2 = 1
+P(1C) = 1/2 = 0.5
+P(1C & 0<start>) = 1/2 = 0.5
+P(2A & 1C & 0<start>) = 1/2 = 0.5
+
+
+P(1C|0<start>) = P(1C & 0<start>) / P(0<start>)
+P(1C|0<start>) = 0.5 / 1 = 0.5
+
+P(2A|1C & 0<start>) = P(2A & 1C & 0<start>) / P(1C & 0<start>)
+P(2A|1C & 0<start>) = 0.5 / 0.5 = 1
+
+nextFreq(token, seq) = # number of times token occurs in a sequence directly after the given seq
+freq(token, seq) = # number of times token occurs in a sequence anywhere after the given seq
+# step 1
+nextFreq(<start>, []) = freq(<start>, []) - freq(<start>, [<start>])
+nextFreq(<start>, []) = 2 - 0
+# step 2
+nextFreq(C, [<start>]) = freq(C, [<start>]) - freq(C, [<start>, C])
+nextFreq(C, [<start>]) = 1 - 0 = 1
+# step 3
+nextFreq(A, [<start>, C]) = freq(A, [<start>, C]) - freq(A, [<start>, C, A])
+nextFreq(A, [<start>, C]) = 2 - 1 = 1
+# step N
+nextFreq(token, seq) = freq(token, seq) - freq(token, seq + [token]) # next freq(tok, seq) = all freqs(tok, seq) - all freqs(tok, seq + [tok])
+
+nextFreq(token, seq) = freq(token, seq) - freq(token, seq + [token])
+# step 1
+seq = []
+prevFreq[token] = freq(token, []) # the first time its just: the number of times token occurs in any sequence, anywhere in the sequence
+
+for i in range(howeverLongTheOutputMaxIs):
+    # get freqs for this idx in the sequence (logits projection)
+    for token in vocab:
+        idxFreq[token] = prevFreq[token] - freq(token, seq + [token])
+
+    # choose token (sampling)
+    probs = idxFreq / sum(idxFreq)
+    chosenToken = argmax(probs)
+    seq = seq + [chosenToken]
+
+    # update prevFreq (hidden -> hidden)
+    for token in vocab:
+        prevFreq[token] = freq(token, seq)
+
+so the only thing we don't know is:
+freq(token, seq)
+
+what we do know is:
+prevFreq
+token
+seq
+
+so we can make a model for:
+f(token, seq) -> # of token anywhere after given seq
+
+freq(token, seq) = freq(token, seq[:-1]) - idxFreq
+
+
+TRAINING LOOP:
+# init
+seq = []
+for token in vocab:
+    seqFreq[token] = freq(token, seq) # measure this manually
+    idxFreq[token] = freq(token, seq) - freq(token, seq + [token]) # measure this manually
+
+for i in range(tokensToGenerate)
+    # get freqs
+    for token in vocab:
+        idxFreq[token] = seqFreq[token] - freq(token, seq + [token])
+
+    # sample freqs
+    topFreqToken = sample(idxFreq)
+    seq = [topFreqToken]
+
+    # update seqFreq
+    for token in vocab:
+        seqFreq[token] = freq(token, seq)
+
+NEED TO MAKE FUNCTION FOR freq(token, seq):
+seqFreq0, idxFreq0
+seqFreq1 = seqFreq0 - idxFreq0
+idxFreq1 = f()
+seqFreq2 = seqFreq1 - idxFreq1
+etc.
+
+<start>CAAR<end>
+
+<start>CAAR<end>
+<start>HAT<end>
+
+0, 1, 2, 2, 3, 4
+0, 5, 2, 6, 4
+
+state = ???
+
+model.probs(state)
+probabilites = [1, 0, 0, 0, 0, 0, 0]
+model.nextState(state, 0)
+state = ???
+
+model.probs(state)
+probabilites = [0, 0.5, 0, 0, 0, 0.5, 0]
+model.nextState(state, 1)
+state = ???
+
+model.probs(state)
+probabilites = [0, 0, 1, 0, 0, 0, 0]
+model.nextState(state, 2)
+state = ???
+
+
+[] -> {0: 1}
+[0] -> {1: 0.5, 5: 0.5}
+[0,1] -> {2: 1}
+
+A
+2, 0
+2, {0, 1, 2}
+
+f(prevSeqFreq[token], prevIdxFreq[token], seqFreq[token], )
+
+2, 0
+2
+
+f(prevSeqFreq[token], prevIdxFreq[token])
+
+-> 0
+0 -> 1
+01 -> 0
+010 -> 0
