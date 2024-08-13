@@ -2,6 +2,10 @@ import struct
 import vocab
 from helperFuncs import *
 
+from line_profiler import profile
+import os
+os.environ["LINE_PROFILE"] = "1"
+
 
 def write_compact_data(data, filename):
     with open(filename, "wb") as f:
@@ -105,9 +109,9 @@ def read_compact_data_texts(filename):
 
 def loadTokens(folder):
     files = sorted(os.listdir(folder), key=lambda x: int(x.split(".")[0]))
-    for file in files:
+    for fileIndex, file in enumerate(files):
         for titleTokens, textTokens in read_compact_data(f"{folder}/{file}"):
-            yield titleTokens, textTokens
+            yield fileIndex, titleTokens, textTokens
 
 
 def loadTokensIndices(folder, indices):
@@ -228,11 +232,11 @@ charToToken = {
 
 tokenToChar = {idx: character for character, idx in charToToken.items()}
 
-
+@profile
 def main():
     wikiFolder = "wikiData"
     saveFolder = "tokenData"
-    maxNumTokens = 50_000_000
+    maxNumTokensPerFile = 50_000_000
 
     tokens = []
     numTokens = 0
@@ -248,7 +252,7 @@ def main():
         numTokens += len(titleTokens) + len(textTokens)
         currentNumTokens += len(titleTokens) + len(textTokens)
 
-        if currentNumTokens > maxNumTokens:
+        if currentNumTokens > maxNumTokensPerFile:
             write_compact_data(tokens, f"{saveFolder}/{fileNum}.bin")
             tokens = []
             currentNumTokens = len(titleTokens) + len(textTokens)

@@ -28,7 +28,7 @@ def main():
     hiddenDim = 128
     numEpochs = 1_000_000
     learningRate = 0.001
-    batchSize = 32
+    batchSize = 128
 
     # Settings
     modelSavePath = "models/embedArticle/0"
@@ -54,15 +54,18 @@ def main():
     model = RNNEmbedder(vocabSize, hiddenDim).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learningRate)
     clearLines(1)
-    print(f"Model Parameter Information:")
+    print(f"Sub-Model Parameter Information:")
     print(f"Vocab Size: {vocabSize:,}")
     print(f"Hidden Dim: {hiddenDim:,}")
     print(f"# Embedding Params: {vocabSize * hiddenDim:,}")
     print(f"# Input->Hidden Params: {hiddenDim * hiddenDim:,}")
     print(f"# Hidden->Hidden Params: {hiddenDim * hiddenDim:,}")
-    print(f"# Hidden Bias Params: {hiddenDim * hiddenDim:,}")
+    print(f"# Hidden Bias Params: {hiddenDim:,}")
     print(
-        f"Total # Params: {vocabSize * hiddenDim + 2 * hiddenDim * hiddenDim + hiddenDim:,}"
+        f"Sub-Model Total # Params: {vocabSize * hiddenDim + 2 * hiddenDim * hiddenDim + hiddenDim:,}"
+    )
+    print(
+        f"Embedder Total # Params (2 x subModel): {sum([p.numel() for p in model.parameters()]):,}"
     )
     print()
 
@@ -112,19 +115,20 @@ def main():
 
         numBatches = int(math.ceil(numPagesPerEpoch / batchSize))
 
-        titleStates = torch.zeros(batchSize, hiddenDim)
-        otherTitleStates = torch.zeros(batchSize, hiddenDim)
-        articleStates = torch.zeros(batchSize, hiddenDim)
+        titleStates = torch.zeros(batchSize, hiddenDim, device=device)
+        otherTitleStates = torch.zeros(batchSize, hiddenDim, device=device)
+        articleStates = torch.zeros(batchSize, hiddenDim, device=device)
 
         for stepNum in range(numBatches):
             print(
-                f"Epoch [{epoch+1}/{numEpochs}], Batch [{stepNum + 1}/{numBatches}], Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
+                f"Epoch [{epoch+1}/{numEpochs}], Batch [{stepNum + 1}/{numBatches}] ({100.0 * (stepNum + 1) /numBatches:.4f}%), Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
             )
             start = perf_counter()
             batch = []
             adjustedBatchSize = min(batchSize, numPagesPerEpoch - numPages)
             for i in range(adjustedBatchSize):
-                batch.append(next(tokenLoader))
+                fileIndex, titleTokens, textTokens = next(tokenLoader)
+                batch.append((titleTokens, textTokens))
             numPages += adjustedBatchSize
             stepNum += 1
 
@@ -211,7 +215,17 @@ def main():
             lastLoss = lossValue
             windowLoss += lossValue
             windowSteps += 1
-            numPages += 1
+            numPages += adjustedBatchSize
+
+            print(f"Title Model Embedding Grad: {model.titleModel.embedding.grad.norm()}")
+            print(f"Title Model I->H Grad: {model.titleModel.ih.grad.norm()}")
+            print(f"Title Model H->H Grad: {model.titleModel.hh.grad.norm()}")
+            print(f"Title Model Bias Grad: {model.titleModel.hh.grad.norm()}")
+
+            print(f"Text Model Embedding Grad: {model.textModel.embedding.grad.norm()}")
+            print(f"Text Model I->H Grad: {model.textModel.ih.grad.norm()}")
+            print(f"Text Model H->H Grad: {model.textModel.hh.grad.norm()}")
+            print(f"Text Model Bias Grad: {model.textModel.hh.grad.norm()}")
 
             batchNumTokens = sum([len(item[0]) + len(item[1]) for item in batch])
             lastTokSec = int(batchNumTokens / (stop - start))
@@ -230,86 +244,7 @@ def main():
                 clearLines(1)
 
             # Clear logging so we are ready for the next step
-            clearLines(4)
-
-        """for stepNum, (titleTokens, textTokens) in enumerate(loadTokens(tokenFolder)):
-            print(
-                f"Epoch [{epoch+1}/{numEpochs}], Step [{stepNum + 1}/{numPagesPerEpoch}], Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
-            )
-            start = perf_counter()
-
-            # zero model grad
-            optimizer.zero_grad()
-
-            model.preCompute()
-
-            # Get text embedding for title
-            state = torch.zeros(model.hiddenDim, device=device)
-            for token in tqdm(titleTokens, desc="Getting Title Embedding"):
-                state = model.titleModel.forwardEmbedded(state, token)
-
-            # Get text embedding for text
-            articleState = torch.zeros(model.hiddenDim, device=device)
-            for token in tqdm(textTokens, desc="Getting Text Embedding"):
-                articleState = model.textModel.forwardEmbedded(
-                    articleState, token
-                )  # get next state
-
-            # Get text embedding for "wrong" title
-            otherTitleTokens = random.choice(titles)
-            while otherTitleTokens == titleTokens:
-                otherTitleTokens = random.choice(titles)
-            otherState = torch.zeros(model.hiddenDim, device=device)
-            for token in tqdm(otherTitleTokens, desc="Getting Other Title Embedding"):
-                otherState = model.titleModel.forwardEmbedded(otherState, token)
-
-            # Normalize embeddings
-            state = state * (1 / state.norm())
-            articleState = articleState * (1 / articleState.norm())
-            otherState = otherState * (1 / otherState.norm())
-
-            # Get dot products
-            correctDot = torch.sum(state * articleState)
-            wrongDot = torch.sum(otherState * articleState)
-
-            # Get loss (best possible loss value is 0)
-            # minimize wrong dot, maximize correctDot
-            loss = wrongDot - correctDot  # [-2, 2]
-            loss = (-2 - loss) ** 2  # [0, 16]
-
-            # Backpropogation
-            print("Doing backpropagation...")
-            loss.backward()
-            optimizer.step()
-
-            # Track loss and numPages
-            stop = perf_counter()
-            lossValue = loss.item()
-            totalLoss += lossValue
-            lastLoss = lossValue
-            windowLoss += lossValue
-            windowSteps += 1
-            lastTokSec = int((2 * len(titleTokens) + len(textTokens)) / (stop - start))
-            numPages += 1
-            numTokens += len(titleTokens) + len(textTokens)
-
-            # Save the trained model
-            if stepNum % saveInterval == 0:
-                print("Saving model...")
-                torch.save(model, f"{modelSavePath}/model.pt")
-                with open(f"{modelSavePath}/loss.txt", "a", encoding="utf-8") as f:
-                    f.write(
-                        f"{epoch * numPagesPerEpoch + stepNum}, {epoch * numTokensPerEpoch + numTokens}, {windowLoss / windowSteps}\n"
-                    )
-                windowLoss = 0
-                windowSteps = 0
-                clearLines(1)
-
-            clearLines(5)
-
-            # Exit after N pages for benchmarking purposes
-            if stepNum == 9:
-                break"""
+            clearLines(4+8)
 
         print(f"Epoch [{epoch+1}/{numEpochs}], Loss: {totalLoss/numPages:.4f}")
 

@@ -631,7 +631,7 @@ int main()
                 clock.restart();
 
                 // Forward
-                std::cout << "Doing forward pass" << std::endl;
+                std::cout << "Getting Title Embeddings" << std::endl;
                 for (int l = 0; l < page.titleSize; l++)
                 {
                     model.forwardStep(state, l, page.title[l]);
