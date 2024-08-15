@@ -127,7 +127,7 @@ struct Matrix
     // Prints the matrix to the terminal
     void print(std::string name)
     {
-        // std::cout << std::fixed << std::setprecision(5);
+        std::cout << std::fixed << std::setprecision(5);
         std::cout << name << ": (" << rows << ", " << cols << ")" << std::endl;
         for (int i = 0; i < rows; i++)
         {

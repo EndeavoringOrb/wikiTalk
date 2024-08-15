@@ -2,8 +2,6 @@ import mwxml
 import os
 from tqdm import tqdm
 
-from line_profiler import profile
-import os
 
 def replaceChars(text: str, replace: list):
     for invalid, valid in replace:
@@ -84,7 +82,6 @@ def wikiLoader(folder):
 
                     yield title, text
 
-@profile
 def wikiLoader(folder, vocab, replace):
     for subFolder in os.listdir(folder):
         if subFolder.endswith(".txt"):

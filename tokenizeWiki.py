@@ -1,11 +1,7 @@
 import struct
 import vocab
 from helperFuncs import *
-
-from line_profiler import profile
-import os
-os.environ["LINE_PROFILE"] = "1"
-
+from tqdm import trange
 
 def write_compact_data(data, filename):
     with open(filename, "wb") as f:
@@ -76,7 +72,7 @@ def read_compact_data_titles(filename):
         # Read the number of tuples
         num_tuples = struct.unpack("I", f.read(4))[0]
 
-        for pageIndex in range(num_tuples):
+        for pageIndex in trange(num_tuples, desc=f"Reading {filename}"):
             # Read the length of each inner list
             len1, len2 = struct.unpack("II", f.read(8))
 
@@ -87,6 +83,7 @@ def read_compact_data_titles(filename):
             f.seek(len2, 1)  # 1 means relative to current position
 
             yield pageIndex, inner_list1
+        clearLines(1)
 
 
 def read_compact_data_texts(filename):
@@ -205,7 +202,7 @@ def countTokensInFile(filename):
         # Read the number of tuples
         num_tuples = struct.unpack("I", f.read(4))[0]
 
-        for _ in range(num_tuples):
+        for _ in trange(num_tuples, desc=f"Reading {filename}"):
             # Read the length of each inner list
             len1, len2 = struct.unpack("II", f.read(8))
 
@@ -214,6 +211,7 @@ def countTokensInFile(filename):
 
             # Skip the actual data
             f.seek(len1 + len2, 1)  # 1 means relative to current position
+        clearLines(1)
 
     return num_tuples, file_tokens
 
@@ -232,7 +230,6 @@ charToToken = {
 
 tokenToChar = {idx: character for character, idx in charToToken.items()}
 
-@profile
 def main():
     wikiFolder = "wikiData"
     saveFolder = "tokenData"

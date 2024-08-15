@@ -41,8 +41,8 @@ plt.plot(
 )
 
 # Customize the plot
-plt.title("Loss vs. Pages Trained On")
-plt.xlabel("Number of Pages Trained On")
+plt.title("Embedding Loss")
+plt.xlabel("Number of Tokens Trained On")
 plt.ylabel("Loss [0, 16] (lower is better)")
 
 # Add grid lines

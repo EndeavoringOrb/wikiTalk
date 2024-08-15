@@ -134,3 +134,74 @@ class RNNEmbedder(nn.Module):
         for token in tokens:
             self.textModel.forwardEmbeddedFast(state, token)
         return state
+
+
+class RNNEmbedderNEW(nn.Module):
+    def __init__(self, vocabSize, hiddenSize, embeddingSize):
+        super(RNNEmbedderNEW, self).__init__()
+        data = torch.normal(0, 0.02, (vocabSize, hiddenSize))
+        self.embedding = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (hiddenSize, hiddenSize))
+        self.ih = nn.Parameter(data)
+        data = torch.normal(0, 0.02, (hiddenSize, hiddenSize))
+        self.hh = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (hiddenSize,))
+        self.bias = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (hiddenSize, embeddingSize))
+        self.out = nn.Parameter(data)
+
+        self.activation = nn.Tanh()
+        self.activation = CustomActivationModule()
+
+        self.vocabSize = vocabSize
+        self.hiddenSize = hiddenSize
+        self.embeddingSize = embeddingSize
+
+    @profile
+    def preCompute(self):
+        # hh
+        self.scaledHH = self.hh / (torch.norm(self.hh, dim=1) * self.hiddenSize)
+
+        # embedding
+        embedded = self.activation(self.embedding)
+        self.embedded = embedded @ self.ih + self.bias
+    
+    @profile
+    # Assumes model.preCompute() has been called after any previous parameter updates
+    def forwardEmbeddedNoBatch(self, state, x):
+        attention = torch.einsum('bi,bj->bi', (state.unsqueeze(0), self.embedded[x].unsqueeze(0)))
+        attention = F.softmax(attention, dim=-1)
+        state = state + attention @ self.scaledHH
+        state = F.tanh(state)
+        return state.squeeze()
+
+    @profile
+    # Assumes model.preCompute() has been called after any previous parameter updates
+    def forwardEmbedded(self, state, x):
+        attention = torch.einsum('bi,bj->bi', (state, self.embedded[x]))
+        attention = F.softmax(attention, dim=-1)
+        state = state + attention @ self.scaledHH
+        state = F.tanh(state)
+        return state
+
+    @profile
+    def getOut(self, state):
+        return state @ self.out
+
+# Define the RNN model
+class RNNSimilarityEmbedder(nn.Module):
+    def __init__(self, vocabSize, hiddenSize, embeddingSize):
+        super(RNNSimilarityEmbedder, self).__init__()
+        self.titleModel = RNNEmbedderNEW(vocabSize, hiddenSize, embeddingSize)
+        self.textModel = RNNEmbedderNEW(vocabSize, hiddenSize, embeddingSize)
+
+        self.vocabSize = vocabSize
+        self.hiddenSize = hiddenSize
+        self.embeddingSize = embeddingSize
+
+    def preCompute(self):
+        self.titleModel.preCompute()
+        self.textModel.preCompute()
