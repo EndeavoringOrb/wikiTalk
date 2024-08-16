@@ -26,6 +26,7 @@ def getNumPages(folder):
         numPages = int(text.split(" ")[0].strip())
     return numPages
 
+
 def getEmbeddingInit(rows, cols, numSteps):
     data = torch.normal(0, 0.02, (rows, cols))
     vectors = torch.nn.Parameter(data)
@@ -53,7 +54,7 @@ def getEmbeddingInit(rows, cols, numSteps):
 
         totalDist.backward()
         optimizer.step()
-    
+
     print(f"{totalDist.item() / (2 * rows)}")
 
     vectors.data /= vectors.norm(dim=1).unsqueeze(-1)
@@ -66,13 +67,12 @@ def main():
     # Hyperparameters
     vocabSize = len(vocab)
     hiddenSize = 32
-    embeddingSize = 128
     numEpochs = 1_000_000
-    learningRate = 1e-4
-    batchSize = 4
+    learningRate = 1e-2
+    batchSize = 32
 
     # Settings
-    modelSavePath = "models/embedArticle/0"
+    modelSavePath = "models/tokenPredArticle/0"
     saveInterval = 1
     tokenFolder = "tokenData"
 
@@ -89,13 +89,15 @@ def main():
 
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
-    model: RNNSimilarityEmbedder = torch.load(f"models/embedArticle/0/model.pt", map_location=device, weights_only=False)
-    #model = RNNSimilarityEmbedder(vocabSize, hiddenSize, embeddingSize).to(device)
-    print(f"Initializing embeddings")
-    #model.titleModel.embedding = getEmbeddingInit(vocabSize, hiddenSize, 10000)
-    #model.textModel.embedding = getEmbeddingInit(vocabSize, hiddenSize, 10000)
+    model: RNNLanguage = torch.load(f"{modelSavePath}/model.pt", weights_only=False, map_location=device)
+    #model = RNNLanguage(vocabSize, hiddenSize, vocabSize).to(device)
+    # print(f"Initializing embeddings")
+    # model.titleModel.embedding = getEmbeddingInit(vocabSize, hiddenSize, 10000)
+    # model.textModel.embedding = getEmbeddingInit(vocabSize, hiddenSize, 10000)
     optimizer = optim.Adam(model.parameters(), lr=learningRate)
-    clearLines(6)
+    criterion = nn.CrossEntropyLoss()
+    # clearLines(6)
+    clearLines(1)
     print(f"Sub-Model Parameter Information:")
     print(f"Vocab Size: {vocabSize:,}")
     print(f"Hidden Dim: {hiddenSize:,}")
@@ -103,13 +105,8 @@ def main():
     print(f"# Input->Hidden Params: {hiddenSize * hiddenSize:,}")
     print(f"# Hidden->Hidden Params: {hiddenSize * hiddenSize:,}")
     print(f"# Hidden Bias Params: {hiddenSize:,}")
-    print(f"# Out Projection Params: {hiddenSize * embeddingSize:,}")
-    print(
-        f"Sub-Model Total # Params: {vocabSize * hiddenSize + 2 * hiddenSize * hiddenSize + hiddenSize + hiddenSize * embeddingSize:,}"
-    )
-    print(
-        f"Embedder Total # Params (2 x subModel): {sum([p.numel() for p in model.parameters()]):,}"
-    )
+    print(f"# Out Projection Params: {hiddenSize * vocabSize:,}")
+    print(f"Model Total # Params: {sum([p.numel() for p in model.parameters()]):,}")
     print()
 
     # Get all titles
@@ -164,10 +161,6 @@ def main():
 
         numBatches = int(math.ceil(numPagesPerEpoch / batchSize))
 
-        titleStates = torch.zeros(batchSize, hiddenSize, device=device)
-        otherTitleStates = torch.zeros(batchSize, hiddenSize, device=device)
-        articleStates = torch.zeros(batchSize, hiddenSize, device=device)
-
         stepNum = 0
 
         for _ in range(numBatches):
@@ -178,21 +171,26 @@ def main():
 
             # Print model grad
             if stepNum > 0:
-                print(
-                    f"Title Model Embedding Grad: {model.titleModel.embedding.grad.norm()}"
-                )
-                print(f"Title Model I->H Grad: {model.titleModel.ih.grad.norm()}")
-                print(f"Title Model H->H Grad: {model.titleModel.hh.grad.norm()}")
-                print(f"Title Model Bias Grad: {model.titleModel.hh.grad.norm()}")
-                print(f"Title Model Out Grad: {model.titleModel.out.grad.norm()}")
+                print(f"Model Init State Grad: {model.initState.grad.norm()}")
+                print(f"Model Init State Data: {model.initState.data.norm()}")
 
-                print(
-                    f"Text Model Embedding Grad: {model.textModel.embedding.grad.norm()}"
-                )
-                print(f"Text Model I->H Grad: {model.textModel.ih.grad.norm()}")
-                print(f"Text Model H->H Grad: {model.textModel.hh.grad.norm()}")
-                print(f"Text Model Bias Grad: {model.textModel.hh.grad.norm()}")
-                print(f"Text Model Out Grad: {model.textModel.out.grad.norm()}")
+                print(f" Model Embedding Grad: {model.embedding.grad.norm()}")
+                print(f" Model Embedding Data: {model.embedding.data.norm()}")
+
+                print(f"      Model I->H Grad: {model.ih.grad.norm()}")
+                print(f"      Model I->H Data: {model.ih.data.norm()}")
+
+                print(f"      Model H->H Grad: {model.hh.grad.norm()}")
+                print(f"      Model H->H Data: {model.hh.data.norm()}")
+
+                print(f"      Model Bias Grad: {model.bias.grad.norm()}")
+                print(f"      Model Bias Data: {model.bias.data.norm()}")
+
+                print(f"       Model Out Grad: {model.out.grad.norm()}")
+                print(f"       Model Out Data: {model.out.data.norm()}")
+
+                print(f"  Model Out Bias Grad: {model.outBias.grad.norm()}")
+                print(f"  Model Out Bias Data: {model.outBias.data.norm()}")
 
             start = perf_counter()
             batch = []
@@ -203,7 +201,7 @@ def main():
             numPages += adjustedBatchSize
 
             # sort batch by article length, and get lengths
-            batch = sorted(batch, key=lambda x: len(x[1]), reverse=False)
+            batch = sorted(batch, key=lambda x: len(x[1]))
             lengths = [len(item[1]) for item in batch]
             lengths.insert(0, 0)
 
@@ -212,72 +210,28 @@ def main():
             model.preCompute()  # Pre-Compute variables for a faster forward pass
 
             # Reset the states
-            titleStates = titleStates.detach()
-            otherTitleStates = otherTitleStates.detach()
-            articleStates = articleStates.detach()
+            states = model.initState.expand(adjustedBatchSize, -1)
 
-            # Non-batched processing of titles cause titles are short
-            for i in trange(adjustedBatchSize, desc="Getting Title Embeddings"):
-                # Get text embedding for title
-                state = torch.zeros(model.hiddenSize, device=device)
-                for token in batch[i][0]:
-                    state = model.titleModel.forwardEmbeddedNoBatch(state, token)
-                titleStates[i] = state
-
-                # Get random "wrong" title that is not equal to correct title
-                otherTitleTokens = random.choice(titles)
-                while otherTitleTokens == batch[i][0]:
-                    otherTitleTokens = random.choice(titles)
-
-                # Get text embedding for "wrong" title
-                otherState = torch.zeros(model.hiddenSize, device=device)
-                for token in otherTitleTokens:
-                    otherState = model.titleModel.forwardEmbeddedNoBatch(
-                        otherState, token
-                    )
-                otherTitleStates[i] = otherState
+            loss = 0
 
             # Batch process articles
-            with tqdm(total=lengths[-1], desc="Getting Article Embeddings") as pbar:
+            with tqdm(total=lengths[-1], desc="Forward Pass") as pbar:
                 for i in range(len(lengths) - 1):
-                    for j in range(lengths[i], lengths[i + 1]):
-                        tokens = [item[1][j] for item in batch[i:]]
-                        tokens = torch.tensor(tokens, device=device, dtype=torch.int64)
-                        newArticleStates = model.textModel.forwardEmbedded(
-                            articleStates[i:], tokens
-                        )
-                        articleStates = torch.cat(
-                            [articleStates[:i], newArticleStates], dim=0
-                        )
+                    # init states and tokens for this length
+                    tokens = []
+                    for item in batch[i:]:
+                        tokens.append(item[1][lengths[i] : lengths[i + 1]])
+                    tokens = torch.tensor(tokens, device=device, dtype=torch.int64)
+
+                    # train
+                    states, newLoss = model.train(states, tokens, criterion)
+
+                    # update
+                    loss += newLoss
                     pbar.update(lengths[i + 1] - lengths[i])
+                    states = states[1:]
 
-            # Normalize embeddings
-            titleEmbeddings = model.titleModel.getOut(titleStates)
-            otherTitleEmbeddings = model.titleModel.getOut(otherTitleStates)
-            articleEmbeddings = model.textModel.getOut(articleStates)
-
-            titleEmbeddings = titleEmbeddings * (
-                1 / titleEmbeddings.norm(dim=-1).unsqueeze(-1)
-            )  # correct title
-            otherTitleEmbeddings = otherTitleEmbeddings * (
-                1 / otherTitleEmbeddings.norm(dim=-1).unsqueeze(-1)
-            )  # wrong title
-            articleEmbeddings = articleEmbeddings * (
-                1 / articleEmbeddings.norm(dim=-1).unsqueeze(-1)
-            )  # article
-
-            # Get dot products
-            correctDot = torch.sum(titleEmbeddings * articleEmbeddings, dim=-1)
-            wrongDot = torch.sum(otherTitleEmbeddings * articleEmbeddings, dim=-1)
-
-            # Get loss (best possible loss value is 0)
-            # minimize wrong dot, maximize correctDot
-            loss = wrongDot - correctDot  # [-2, 2]
-            loss = (-2 - loss) ** 2  # [0, 16]
-            loss = loss[
-                :adjustedBatchSize
-            ]  # if we are on the last batch, we only use part of the states
-            loss = torch.mean(loss)
+            loss = loss / lengths[-1]
 
             # Backpropogation
             print("Doing backpropagation...")
@@ -293,7 +247,7 @@ def main():
             windowSteps += 1
             numPages += adjustedBatchSize
 
-            batchNumTokens = sum([len(item[0]) + len(item[1]) for item in batch])
+            batchNumTokens = sum([len(item[1]) for item in batch])
             lastTokSec = int(batchNumTokens / (stop - start))
             numTokens += batchNumTokens
 
@@ -313,15 +267,14 @@ def main():
                 clearLines(1)
 
             # Clear logging so we are ready for the next step
-            clearLines(4 + (10 if stepNum > 0 else 0))
+            clearLines(3 + (14 if stepNum > 0 else 0))
 
             stepNum += 1
-            
 
             # FOR TESTING ONLY
             # Stop after first few batches to see if we can overfit
-            if stepNum == 1:
-                break
+            #if stepNum == 2:
+            #    break
 
         print(f"Epoch [{epoch+1}/{numEpochs}], Loss: {totalLoss/stepNum:.4f}")
 

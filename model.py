@@ -45,7 +45,7 @@ class CustomActivationModule(nn.Module):
 
 
 # Define the RNN model
-class RNNLanguage(nn.Module):
+class RNNLanguageOLD(nn.Module):
     def __init__(self, vocabSize, hiddenDim):
         super(RNNLanguage, self).__init__()
         data = torch.normal(0, 0.02, (vocabSize, hiddenDim))
@@ -137,7 +137,7 @@ class RNNEmbedder(nn.Module):
 
 
 class RNNEmbedderNEW(nn.Module):
-    def __init__(self, vocabSize, hiddenSize, embeddingSize):
+    def __init__(self, vocabSize, hiddenSize, outSize):
         super(RNNEmbedderNEW, self).__init__()
         data = torch.normal(0, 0.02, (vocabSize, hiddenSize))
         self.embedding = nn.Parameter(data)
@@ -150,7 +150,7 @@ class RNNEmbedderNEW(nn.Module):
         data = torch.normal(0, 0.02, (hiddenSize,))
         self.bias = nn.Parameter(data)
 
-        data = torch.normal(0, 0.02, (hiddenSize, embeddingSize))
+        data = torch.normal(0, 0.02, (hiddenSize, outSize))
         self.out = nn.Parameter(data)
 
         self.activation = nn.Tanh()
@@ -158,7 +158,7 @@ class RNNEmbedderNEW(nn.Module):
 
         self.vocabSize = vocabSize
         self.hiddenSize = hiddenSize
-        self.embeddingSize = embeddingSize
+        self.outSize = outSize
 
     @profile
     def preCompute(self):
@@ -172,7 +172,7 @@ class RNNEmbedderNEW(nn.Module):
     @profile
     # Assumes model.preCompute() has been called after any previous parameter updates
     def forwardEmbeddedNoBatch(self, state, x):
-        attention = torch.einsum('bi,bj->bi', (state.unsqueeze(0), self.embedded[x].unsqueeze(0)))
+        attention = torch.einsum('i,j->i', (state, self.embedded[x]))
         attention = F.softmax(attention, dim=-1)
         state = state + attention @ self.scaledHH
         state = F.tanh(state)
@@ -205,3 +205,75 @@ class RNNSimilarityEmbedder(nn.Module):
     def preCompute(self):
         self.titleModel.preCompute()
         self.textModel.preCompute()
+
+class RNNLanguage(nn.Module):
+    def __init__(self, vocabSize, hiddenSize, outSize):
+        super(RNNLanguage, self).__init__()
+        data = torch.normal(0, 0.02, (vocabSize, hiddenSize))
+        self.embedding = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (hiddenSize, hiddenSize))
+        self.ih = nn.Parameter(data)
+        data = torch.normal(0, 0.02, (hiddenSize, hiddenSize))
+        self.hh = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (hiddenSize,))
+        self.bias = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (hiddenSize, outSize))
+        self.out = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (outSize,))
+        self.outBias = nn.Parameter(data)
+
+        data = torch.normal(0, 0.02, (hiddenSize,))
+        self.initState = nn.Parameter(data)
+
+        self.activation = nn.Tanh()
+        self.activation = CustomActivationModule()
+
+        self.vocabSize = vocabSize
+        self.hiddenSize = hiddenSize
+        self.outSize = outSize
+
+    @profile
+    def preCompute(self):
+        # hh
+        self.scaledHH = self.hh / (torch.norm(self.hh, dim=1) * self.hiddenSize)
+
+        # embedding
+        embedded = self.activation(self.embedding)
+        self.embedded = embedded @ self.ih + self.bias
+    
+    @profile
+    # Assumes model.preCompute() has been called after any previous parameter updates
+    def forwardEmbeddedNoBatch(self, state, x):
+        attention = torch.einsum('i,j->i', (state, self.embedded[x]))
+        attention = F.softmax(attention, dim=-1)
+        state = state + attention @ self.scaledHH
+        state = F.tanh(state)
+        return state.squeeze()
+
+    @profile
+    # Assumes model.preCompute() has been called after any previous parameter updates
+    def forwardEmbedded(self, state, x):
+        attention = torch.einsum('bi,bj->bi', (state, self.embedded[x]))
+        attention = F.softmax(attention, dim=-1)
+        state = state + attention @ self.scaledHH
+        state = F.tanh(state)
+        return state
+
+    @profile
+    def getOut(self, state):
+        return state @ self.out + self.outBias
+
+    @profile
+    def train(self, state, tokens, criterion):
+        loss = 0
+        numSteps = len(tokens[0])
+        for i in range(numSteps):
+            nextToken = tokens[:, i]
+            pred = self.getOut(state)
+            loss += criterion(pred, nextToken)
+            state = self.forwardEmbedded(state, nextToken)
+        return state, loss
