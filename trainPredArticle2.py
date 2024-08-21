@@ -111,13 +111,16 @@ def main():
     print(f"Model Parameter Information:")
     print(f"Vocab Size: {model.vocabSize:,}")
     print(f"Hidden Dim: {model.hiddenSize:,}")
-    print(f"# Embedding Params: {vocabSize * model.hiddenSize:,}")
-    print(f"# Input->Hidden Params: {model.hiddenSize * model.hiddenSize:,}")
-    print(f"# Hidden->Hidden Params: {model.hiddenSize * model.hiddenSize:,}")
-    print(f"# Hidden Bias Params: {model.hiddenSize:,}")
-    print(f"# Out Projection Params: {model.hiddenSize * model.vocabSize:,}")
-    print(f"Model Total # Params: {sum([p.numel() for p in model.parameters()]):,}")
+    nParams = sum([p.numel() for p in model.parameters()])
+    print(f"Model Total # Params: {nParams:,}")
     print()
+
+    # Init jacobians
+    delta = torch.zeros(hiddenSize, nParams)
+    dL_dP = torch.zeros(nParams)
+    dR_dPCurrent = torch.zeros(hiddenSize, nParams)
+    dR_dRPrev = torch.zeros(hiddenSize, hiddenSize)
+    dL_dR = torch.zeros(hiddenSize)
 
     # Get all titles
     print(f"Loading all page titles...")
@@ -179,29 +182,6 @@ def main():
                 f"Epoch [{epoch+1}/{numEpochs}], Batch [{stepNum + 1}/{numBatches}] ({100.0 * (stepNum + 1) /numBatches:.4f}%), Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
             )
 
-            # Print model grad
-            if False:
-                print(f"Model Init State Grad: {model.initState.grad.norm()}")
-                print(f"Model Init State Data: {model.initState.data.norm()}")
-
-                print(f" Model Embedding Grad: {model.embedding.grad.norm()}")
-                print(f" Model Embedding Data: {model.embedding.data.norm()}")
-
-                print(f"      Model I->H Grad: {model.ih.grad.norm()}")
-                print(f"      Model I->H Data: {model.ih.data.norm()}")
-
-                print(f"      Model H->H Grad: {model.hh.grad.norm()}")
-                print(f"      Model H->H Data: {model.hh.data.norm()}")
-
-                print(f"      Model Bias Grad: {model.bias.grad.norm()}")
-                print(f"      Model Bias Data: {model.bias.data.norm()}")
-
-                print(f"       Model Out Grad: {model.out.grad.norm()}")
-                print(f"       Model Out Data: {model.out.data.norm()}")
-
-                print(f"  Model Out Bias Grad: {model.outBias.grad.norm()}")
-                print(f"  Model Out Bias Data: {model.outBias.data.norm()}")
-
             start = perf_counter()
             batch = []
             adjustedBatchSize = min(batchSize, numPagesPerEpoch - numPages)
@@ -221,6 +201,7 @@ def main():
 
             # Reset the states
             states = model.initState.expand(adjustedBatchSize, -1)
+            delta.fill_(0)
 
             loss = 0
 
@@ -234,7 +215,19 @@ def main():
                     tokens = torch.tensor(tokens, device=device, dtype=torch.int64)
 
                     # train
-                    states, newLoss = model.train(states, tokens, criterion)
+                    for tokIdx, token in enumerate(tokens):
+                        # Get pred
+                        pred = model.getPreds(states)
+
+                        # Get dR_dPCurrent
+                        # Get dR_dRPrev
+                        # Get dL_dR
+
+                        # Update delta
+                        # Update dL_dP
+
+                        
+                    #states, newLoss = model.train(states, tokens, criterion)
 
                     # update
                     loss += newLoss
