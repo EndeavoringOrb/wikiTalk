@@ -142,3 +142,21 @@ f(prevSeqFreq[token], prevIdxFreq[token])
 0 -> 1
 01 -> 0
 010 -> 0
+
+
+
+
+# constant memory bptt
+delta = 0
+dL_dP = 0
+dR_PCurrent = 0
+dR_dRPrev = 0
+dY_dRPrev = 0
+
+for each step:
+    get dR_PCurrent
+    get dR_dRPrev
+
+    delta = dR_dPCurrent + dR_dRPrev @ delta
+    dY_dP = dY_dR @ delta
+    dL_dP = dL_dY @ dY_dP
