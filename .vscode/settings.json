@@ -88,6 +88,7 @@
         "xloctime": "cpp",
         "xmemory": "cpp",
         "xtree": "cpp",
-        "cstdarg": "cpp"
+        "cstdarg": "cpp",
+        "stdfloat": "cpp"
     }
 }

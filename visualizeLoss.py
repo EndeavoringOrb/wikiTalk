@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize
 import csv
 import numpy as np
 
@@ -8,7 +9,7 @@ tokens = []
 loss = []
 
 # Read the data from the file
-with open("models/tokenPredArticle/0/loss.txt", "r") as file:
+with open("models/tokenPredArticle/current/loss.txt", "r") as file:
     csv_reader = csv.reader(file)
     next(csv_reader)  # Skip the header row
     for row in csv_reader:
@@ -25,20 +26,9 @@ loss_array = np.array(loss)
 x_array = tokens_array
 x = tokens 
 
-# Calculate the line of best fit
-coefficients = np.polyfit(x_array, loss_array, 1)
-line_of_best_fit = np.poly1d(coefficients)
-
-m, b = line_of_best_fit.coeffs
-
-print(f"Line of Best Fit: {m}x + {b}")
-
 # Create the plot
 plt.figure(figsize=(10, 6))
-plt.scatter(x, loss, color="blue", label="Data points")
-plt.plot(
-    x_array, line_of_best_fit(x_array), color="red", label="Line of best fit"
-)
+plt.scatter(x_array, loss_array, color="blue", label="Data points")
 
 # Customize the plot
 plt.title("Embedding Loss")
@@ -52,5 +42,6 @@ plt.grid(True, linestyle="--", alpha=0.7)
 plt.legend()
 
 # Show the plot
+plt.yscale("log")
 plt.tight_layout()
 plt.show()

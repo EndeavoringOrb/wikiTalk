@@ -30,7 +30,7 @@ def getNumPages(folder):
 @profile
 def main():
     # Settings
-    modelSavePath = "models/tokenPredArticle/0"
+    modelSavePath = "models/tokenPredArticle/current"
 
     device = torch.device(
         "cpu"
@@ -38,7 +38,7 @@ def main():
 
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
-    model: RNNLanguage = torch.load(f"{modelSavePath}/model.pt", weights_only=False, map_location=device)
+    model: RecurrentTransformer = torch.load(f"{modelSavePath}/model.pt", weights_only=False, map_location=device)
     clearLines(1)
     print(f"Sub-Model Parameter Information:")
     print(f"Vocab Size: {model.vocabSize:,}")
@@ -57,11 +57,11 @@ def main():
         numTokens = int(input("\n\nEnter # of tokens to generate: "))
 
         for i in range(numTokens):
-            pred = model.getOut(state)
+            pred = model.getPreds(state)
             probs = F.softmax(pred, dim=0)
-            token = torch.multinomial(probs, 1).item()
-            print(decode([token]), end="", flush=True)
-            state = model.forwardEmbeddedNoBatch(state, token)
+            token = torch.multinomial(probs, 1)
+            print(decode([token.item()]), end="", flush=True)
+            state = model.nextState(state, token)
 
 if __name__ == "__main__":
     main()

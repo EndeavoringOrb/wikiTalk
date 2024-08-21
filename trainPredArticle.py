@@ -66,13 +66,17 @@ def getEmbeddingInit(rows, cols, numSteps):
 def main():
     # Hyperparameters
     vocabSize = len(vocab)
-    hiddenSize = 32
+    hiddenSize = 256
     numEpochs = 1_000_000
-    learningRate = 1e-2
-    batchSize = 32
+    learningRate = 2e-4
+    batchSize = 1
+    nHead = 2
+    headSize = 32
+    nLayer = 1
 
     # Settings
-    modelSavePath = "models/tokenPredArticle/0"
+    modelLoadPath = "models/tokenPredArticle/1_0"
+    modelSavePath = "models/tokenPredArticle/current"
     saveInterval = 1
     tokenFolder = "tokenData"
 
@@ -89,8 +93,14 @@ def main():
 
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
-    model: RNNLanguage = torch.load(f"{modelSavePath}/model.pt", weights_only=False, map_location=device)
-    #model = RNNLanguage(vocabSize, hiddenSize, vocabSize).to(device)
+    # model: RNNLanguage = torch.load(
+    #    f"{modelLoadPath}/model.pt", weights_only=False, map_location=device
+    # )
+    model: RecurrentTransformer = RecurrentTransformer(
+        vocabSize, hiddenSize, nHead, headSize, nLayer, device
+    )
+    # model: RNNLanguage = torch.load(f"{modelLoadPath}/model.pt", weights_only=False, map_location=device)
+    # model = RNNLanguage(vocabSize, hiddenSize, vocabSize).to(device)
     # print(f"Initializing embeddings")
     # model.titleModel.embedding = getEmbeddingInit(vocabSize, hiddenSize, 10000)
     # model.textModel.embedding = getEmbeddingInit(vocabSize, hiddenSize, 10000)
@@ -98,14 +108,14 @@ def main():
     criterion = nn.CrossEntropyLoss()
     # clearLines(6)
     clearLines(1)
-    print(f"Sub-Model Parameter Information:")
-    print(f"Vocab Size: {vocabSize:,}")
-    print(f"Hidden Dim: {hiddenSize:,}")
-    print(f"# Embedding Params: {vocabSize * hiddenSize:,}")
-    print(f"# Input->Hidden Params: {hiddenSize * hiddenSize:,}")
-    print(f"# Hidden->Hidden Params: {hiddenSize * hiddenSize:,}")
-    print(f"# Hidden Bias Params: {hiddenSize:,}")
-    print(f"# Out Projection Params: {hiddenSize * vocabSize:,}")
+    print(f"Model Parameter Information:")
+    print(f"Vocab Size: {model.vocabSize:,}")
+    print(f"Hidden Dim: {model.hiddenSize:,}")
+    print(f"# Embedding Params: {vocabSize * model.hiddenSize:,}")
+    print(f"# Input->Hidden Params: {model.hiddenSize * model.hiddenSize:,}")
+    print(f"# Hidden->Hidden Params: {model.hiddenSize * model.hiddenSize:,}")
+    print(f"# Hidden Bias Params: {model.hiddenSize:,}")
+    print(f"# Out Projection Params: {model.hiddenSize * model.vocabSize:,}")
     print(f"Model Total # Params: {sum([p.numel() for p in model.parameters()]):,}")
     print()
 
@@ -170,7 +180,7 @@ def main():
             )
 
             # Print model grad
-            if stepNum > 0:
+            if False:
                 print(f"Model Init State Grad: {model.initState.grad.norm()}")
                 print(f"Model Init State Data: {model.initState.data.norm()}")
 
@@ -267,14 +277,14 @@ def main():
                 clearLines(1)
 
             # Clear logging so we are ready for the next step
-            clearLines(3 + (14 if stepNum > 0 else 0))
+            clearLines(3 + (14 if False else 0))
 
             stepNum += 1
 
             # FOR TESTING ONLY
             # Stop after first few batches to see if we can overfit
-            #if stepNum == 2:
-            #    break
+            # if stepNum == 1:
+            #     break
 
         print(f"Epoch [{epoch+1}/{numEpochs}], Loss: {totalLoss/stepNum:.4f}")
 
