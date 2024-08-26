@@ -1,7 +1,7 @@
 import torch
 from model import RecurrentTransformer
 from tokenizeWiki import *
-import bisect
+from time import perf_counter
 
 from line_profiler import profile
 import os
@@ -72,10 +72,9 @@ def embedWiki(
     f.write(struct.pack("I", model.hiddenSize))
 
     embedding: torch.Tensor = torch.zeros(model.hiddenSize)
+    print()
 
-    for fileIndex, titleTokens, textTokens in tqdm(
-        loadTokens(dataFolder), desc="Embedding Wiki Pages", total=totalNumPages
-    ):
+    for fileIndex, titleTokens, textTokens in loadTokens(dataFolder):
         if fileIndex != fileNum:
             f.close()
             fileNum += 1
@@ -84,6 +83,8 @@ def embedWiki(
             f.write(struct.pack("I", numPages[fileNum]))
             # Write the length of each tensor
             f.write(struct.pack("I", model.hiddenSize))
+        
+        start = perf_counter()
 
         embedding = model.initState.unsqueeze(0)
         for token in torch.tensor(textTokens, dtype=torch.int64):
@@ -95,6 +96,10 @@ def embedWiki(
 
         # Write the tensor data
         f.write(embedding.cpu().numpy().tobytes())
+
+        end = perf_counter()
+        clearLines(1)
+        print(f"Tok/Sec: {len(textTokens)/(end - start)}")
 
 
 @torch.no_grad()

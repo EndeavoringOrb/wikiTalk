@@ -1,5 +1,6 @@
 import os
 import json
+import numpy as np
 import math
 import torch
 import pickle
@@ -13,6 +14,7 @@ from model import *
 from vocab import *
 from tokenizeWiki import loadTokens, loadTitles, countNumTokens
 from time import perf_counter
+from optimizer import CustomAdam
 
 from line_profiler import profile
 import os
@@ -61,22 +63,56 @@ def getEmbeddingInit(rows, cols, numSteps):
 
     return vectors
 
+@profile
+def compute_jacobian_params2(output, input, model_zeros, device):
+    grad_output = torch.eye(output.size(1), device=device).unsqueeze(dim=1)
+    jacobian = torch.autograd.grad(
+        outputs=output,
+        inputs=input,
+        grad_outputs=grad_output,
+        retain_graph=True,
+        create_graph=True,
+        is_grads_batched=True,
+        allow_unused=True,
+    )
+    jacs = []
+    for j, jac in enumerate(jacobian):
+        if jac is not None:
+            jacs.append(jac.view(output.size(1), -1))
+        else:
+            jacs.append(model_zeros[j].repeat(output.size(1), 1))
+    return torch.cat(jacs, dim=-1).detach()
+
+@profile
+def compute_jacobian2(output, input, device):
+    grad_output = torch.eye(output.size(1), device=device).unsqueeze(dim=1)
+    jacobian = torch.autograd.grad(
+        outputs=output,
+        inputs=input,
+        grad_outputs=grad_output,
+        retain_graph=True,
+        create_graph=True,
+        is_grads_batched=True,
+        allow_unused=True,
+    )
+    return jacobian[0]
+
 
 @profile
 def main():
     # Hyperparameters
     vocabSize = len(vocab)
-    hiddenSize = 384
+    hiddenSize = 64
     numEpochs = 1_000_000
     learningRate = 2e-4
     batchSize = 1
     nHead = 2
     headSize = 32
-    nLayer = 1
+    nLayer = 2
 
     # Settings
-    modelLoadPath = "models/tokenPredArticle/1_0"
-    modelSavePath = "models/tokenPredArticle/current"
+    modelLoadPath = "models/tokenPredArticle2/1_0"
+    modelSavePath = "models/tokenPredArticle2/current"
     saveInterval = 1
     tokenFolder = "tokenData"
 
@@ -99,13 +135,16 @@ def main():
     model: RecurrentTransformer = RecurrentTransformer(
         vocabSize, hiddenSize, nHead, headSize, nLayer, device
     )
+    nParams = sum([p.numel() for p in model.parameters()])
     # model: RNNLanguage = torch.load(f"{modelLoadPath}/model.pt", weights_only=False, map_location=device)
     # model = RNNLanguage(vocabSize, hiddenSize, vocabSize).to(device)
     # print(f"Initializing embeddings")
     # model.titleModel.embedding = getEmbeddingInit(vocabSize, hiddenSize, 10000)
     # model.textModel.embedding = getEmbeddingInit(vocabSize, hiddenSize, 10000)
-    optimizer = optim.Adam(model.parameters(), lr=learningRate)
-    criterion = nn.CrossEntropyLoss()
+
+    # create optimizer
+    optimizer = CustomAdam(nParams, device, learningRate)
+
     # clearLines(6)
     clearLines(1)
     print(f"Model Parameter Information:")
@@ -115,12 +154,31 @@ def main():
     print(f"Model Total # Params: {nParams:,}")
     print()
 
-    # Init jacobians
-    delta = torch.zeros(hiddenSize, nParams)
+    # initialize things for training
+    params = list(model.parameters())
+    model_zeros = [
+        torch.zeros(
+            torch.prod(torch.tensor([*param.shape])).unsqueeze(0), device=param.device
+        )
+        for param in params
+    ]
     dL_dP = torch.zeros(nParams)
+    delta = torch.zeros(hiddenSize, nParams)
     dR_dPCurrent = torch.zeros(hiddenSize, nParams)
     dR_dRPrev = torch.zeros(hiddenSize, hiddenSize)
     dL_dR = torch.zeros(hiddenSize)
+
+    lm_head_weight_index = -1
+    lm_head_bias_index = -1
+    paramIndex = 0
+
+    for i, thing in enumerate(model.named_parameters()):
+        if thing[0] == "lm_head.weight":
+            lm_head_weight_index = paramIndex
+        elif thing[0] == "lm_head.bias":
+            lm_head_bias_index = paramIndex
+        paramIndex += np.prod(thing[1].shape)
+        print(f"{i}: {thing[0]}")
 
     # Get all titles
     print(f"Loading all page titles...")
@@ -196,12 +254,11 @@ def main():
             lengths.insert(0, 0)
 
             # Prepare for forward pass
-            optimizer.zero_grad()  # Zero all gradients in the model
             model.preCompute()  # Pre-Compute variables for a faster forward pass
 
             # Reset the states
-            states = model.initState.expand(adjustedBatchSize, -1)
-            delta.fill_(0)
+            states = model.initState.expand(adjustedBatchSize, -1).requires_grad_()
+            newStates = states.clone().requires_grad_()
 
             loss = 0
 
@@ -215,31 +272,86 @@ def main():
                     tokens = torch.tensor(tokens, device=device, dtype=torch.int64)
 
                     # train
-                    for tokIdx, token in enumerate(tokens):
+                    for tokIdx in range(len(tokens[0])):
+                        token = tokens[:, tokIdx]
+                        if newStates.grad_fn != None:
+                            # Get dR_dPCurrent
+                            dR_dPCurrent = compute_jacobian_params2(
+                                newStates, params, model_zeros, device
+                            )
+
+                            # Get dR_dRPrev
+                            dR_dRPrev = compute_jacobian2(newStates, states, device).transpose(0, 1)
+
+                            # Update delta
+                            delta = dR_dPCurrent + dR_dRPrev @ delta
+
                         # Get pred
-                        pred = model.getPreds(states)
+                        pred = model.getPreds(newStates)
 
-                        # Get dR_dPCurrent
-                        # Get dR_dRPrev
-                        # Get dL_dR
+                        with torch.no_grad():
+                            # Get dY_dR
+                            dY_dR = compute_jacobian2(
+                                pred, newStates, device
+                            ).transpose(0, 1)
 
-                        # Update delta
-                        # Update dL_dP
+                            # Get probs
+                            probs = F.softmax(pred, dim=-1)
 
-                        
-                    #states, newLoss = model.train(states, tokens, criterion)
+                            # Update loss
+                            loss += -torch.log(probs[:, token])
+
+                            # Get dL_dP
+                            dL_dY = probs.clone()
+                            mask = torch.zeros_like(dL_dY)
+                            mask[:, token] += 1
+                            dL_dY = dL_dY - mask
+
+                            # Update dL_dP
+                            dY_dP = dY_dR @ delta
+                            dY_dP[
+                                :, :, lm_head_bias_index : lm_head_bias_index + vocabSize
+                            ] += 1
+                            for vocIdx in range(vocabSize):
+                                dY_dP[
+                                    :, :,
+                                    lm_head_weight_index + vocIdx * hiddenSize : lm_head_weight_index
+                                    + (vocIdx + 1) * hiddenSize,
+                                ] += newStates.unsqueeze(1)
+                            dL_dP += (dL_dY @ (dY_dR @ delta)).squeeze()
+
+                        # Get next state
+                        states = newStates
+                        newStates = model.nextState(states, token)
+
+                        pbar.update(1)
+                        #print(dL_dP.norm() / (lengths[i] + tokIdx + 1))
+
+                    # states, newLoss = model.train(states, tokens, criterion)
 
                     # update
-                    loss += newLoss
-                    pbar.update(lengths[i + 1] - lengths[i])
+                    #pbar.update(lengths[i + 1] - lengths[i])
                     states = states[1:]
 
             loss = loss / lengths[-1]
 
-            # Backpropogation
-            print("Doing backpropagation...")
-            loss.backward()
-            optimizer.step()
+            # Manually update the model parameters using gradient descent
+            with torch.no_grad():
+                dL_dP *= 1 / lengths[-1]
+                print(f"Grad norm: {dL_dP.norm()}")
+                grads = optimizer.get_grads(dL_dP)
+                start_idx = 0
+                for param in params:
+                    param_length = param.numel()
+                    param_gradient = grads[
+                        start_idx : start_idx + param_length
+                    ].view_as(param)
+                    param -= param_gradient
+                    start_idx += param_length
+
+                # Reset for next sequence
+                dL_dP.fill_(0)
+                delta.fill_(0)
 
             # Track loss and counters
             stop = perf_counter()

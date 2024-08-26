@@ -7,79 +7,6 @@ import os
 
 os.environ["LINE_PROFILE"] = "0"
 
-
-class RNNLanguage(nn.Module):
-    def __init__(self, vocabSize, hiddenSize, outSize):
-        super(RNNLanguage, self).__init__()
-        data = torch.normal(0, 0.02, (vocabSize, hiddenSize))
-        self.embedding = nn.Parameter(data)
-
-        data = torch.normal(0, 0.02, (hiddenSize, hiddenSize))
-        self.ih = nn.Parameter(data)
-        data = torch.normal(0, 0.02, (hiddenSize, hiddenSize))
-        self.hh = nn.Parameter(data)
-
-        data = torch.normal(0, 0.02, (hiddenSize,))
-        self.bias = nn.Parameter(data)
-
-        data = torch.normal(0, 0.02, (hiddenSize, outSize))
-        self.out = nn.Parameter(data)
-
-        data = torch.normal(0, 0.02, (outSize,))
-        self.outBias = nn.Parameter(data)
-
-        data = torch.normal(0, 0.02, (hiddenSize,))
-        self.initState = nn.Parameter(data)
-
-        self.activation = nn.Tanh()
-
-        self.vocabSize = vocabSize
-        self.hiddenSize = hiddenSize
-        self.outSize = outSize
-
-    @profile
-    def preCompute(self):
-        # hh
-        self.scaledHH = self.hh / (torch.norm(self.hh, dim=1) * self.hiddenSize)
-
-        # embedding
-        embedded = self.activation(self.embedding)
-        self.embedded = embedded @ self.ih + self.bias
-
-    @profile
-    # Assumes model.preCompute() has been called after any previous parameter updates
-    def forwardEmbeddedNoBatch(self, state, x):
-        attention = torch.einsum("i,j->i", (state, self.embedded[x]))
-        attention = F.softmax(attention, dim=-1)
-        state = state + attention @ self.scaledHH
-        state = self.activation(state)
-        return state.squeeze()
-
-    @profile
-    # Assumes model.preCompute() has been called after any previous parameter updates
-    def forwardEmbedded(self, state, x):
-        attention = torch.einsum("bi,bj->bi", (state, self.embedded[x]))
-        attention = F.softmax(attention, dim=-1)
-        state = state + attention @ self.scaledHH
-        state = F.tanh(state)
-        return state
-
-    @profile
-    def getOut(self, state):
-        return state @ self.out + self.outBias
-
-    @profile
-    def train(self, state, tokens, criterion):
-        loss = 0
-        numSteps = len(tokens[0])
-        for i in range(numSteps):
-            nextToken = tokens[:, i]
-            pred = self.getOut(state)
-            loss += criterion(pred, nextToken)
-            state = self.forwardEmbedded(state, nextToken)
-        return state, loss
-
-
 class Head(nn.Module):
     """one head of self-attention"""
 
@@ -93,17 +20,18 @@ class Head(nn.Module):
 
         self.proj = nn.Linear(headSize, 1)
 
-        # self.dropout = nn.Dropout(dropout)
+        self.activation = nn.GELU()
 
+    @profile
     def forward(self, x, tok_emb):
         # x has size (batch, channels)
         # tok_emb has size (batch, channels)
         # output of size (batch, head size)
         k = self.key(tok_emb)  # (B,1,hs)
+        k = self.activation(k)
 
         q = self.query(x)  # (B,channels,hs)
-        q2 = self.query_pos(self.positions)
-        q = q + q2  # add the position embedding to the query
+        q = self.activation(q)
 
         # compute attention scores ("affinities")
         wei = (
@@ -114,7 +42,11 @@ class Head(nn.Module):
 
         # perform the weighted aggregation of the values
         v = self.value(tok_emb)  # (B,1,hs)
+        v = self.activation(v)
+
         out = wei @ v  # (B, C, 1) @ (B, 1, hs) -> (B, C, hs)
+        out = self.activation(out)
+
         out = self.proj(out).squeeze()  # (B, C)
 
         return out
@@ -128,6 +60,7 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([Head(embdSize, headSize, device) for _ in range(nHead)])
         self.proj = nn.Linear(embdSize * nHead, embdSize)
 
+    @profile
     def forward(self, x, tok_emb):
         x = x.unsqueeze(dim=-1)
         out = torch.cat([h(x, tok_emb) for h in self.heads], dim=-1)
@@ -142,11 +75,11 @@ class FeedFoward(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(embdSize, 4 * embdSize),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(4 * embdSize, embdSize),
-            # nn.Dropout(dropout),
         )
 
+    @profile
     def forward(self, x):
         return self.net(x)
 
@@ -163,7 +96,18 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(embdSize)
         self.ln2 = nn.LayerNorm(embdSize)
         self.ln3 = nn.LayerNorm(embdSize)
+    
+    def preCompute(self, embeddingTable):
+        self.ln_embed = self.ln2(embeddingTable)
 
+    @profile
+    def forwardPreComputed(self, x):
+        state, tokens = x
+        state = state + self.sa(self.ln1(state), self.ln2(tok_emb))
+        state = state + self.ffwd(self.ln3(state))
+        return (state, tokens)
+
+    @profile
     def forward(self, x):
         state, tok_emb = x
         state = state + self.sa(self.ln1(state), self.ln2(tok_emb))
@@ -178,8 +122,10 @@ class RecurrentTransformer(nn.Module):
         self.hiddenSize = embdSize
         
         # each token directly reads off the logits for the next token from a lookup table, embeddings are not ternary
-        self.token_embedding_table = nn.Embedding(vocabSize, embdSize)
-        self.token_position_embedding_table = nn.Embedding(embdSize, embdSize)
+        data = torch.normal(0, 0.02, (vocabSize, embdSize))
+        self.token_embedding_table = nn.Parameter(data)
+        #self.token_embedding_table = nn.Embedding(vocabSize, embdSize)
+        
         self.blocks = nn.Sequential(
             *[Block(embdSize, nHead, headSize, device) for _ in range(nLayer)]
         )
@@ -208,13 +154,14 @@ class RecurrentTransformer(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, state, idx):
-        tok_emb = self.token_embedding_table(idx)  # (B,C)
+        tok_emb = self.token_embedding_table[idx]  # (B,C)
         state, tok_emb = self.blocks((state, tok_emb))  # (B,C)
         state = self.ln_f(state)  # (B,C), this is the new state
         logits = self.lm_head(state)  # (B,vocab_size)
 
         return state, logits
 
+    @profile
     def nextState(self, state, idx):
         tok_emb = self.token_embedding_table(idx)  # (B,C)
         state, tok_emb = self.blocks((state, tok_emb))  # (B,C)
@@ -226,6 +173,8 @@ class RecurrentTransformer(nn.Module):
 
     def preCompute(self):
         pass
+        #for block in self.blocks:
+        #    block.preCompute()
 
     @profile
     def train(self, state, tokens, criterion):

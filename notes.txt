@@ -154,15 +154,27 @@ dR_dRPrev = 0
 dL_dR = 0
 
 for each step:
-    get dR_PCurrent
+    get dR_dPCurrent
     get dR_dRPrev
-    get dL_dR
+    get dL_dY
+    get dY_dPOutCurrent -> dR_dPCurrent
+    get dY_dR
 
     delta = dR_dPCurrent + dR_dRPrev @ delta
-    dL_dP = dL_dR @ delta
+    dY_dP = dY_dPOutCurrent + dY_dR @ delta
+    dL_dP = dL_dY @ dY_dP
+
+(1, embd) @ (embd, vocab)
 
 get dL_dR:
     dL_dY = [prob - 1 if i == target else prob for prob in probs]
     lm_head.bias.grad = dL_dY
     lm_head.weight.grad = dL_dY @ state
     dL_dR = dL_dY @ lm_head.weight
+
+get dR:
+    ln_f.bias.grad = 1
+    ln_f.weight.grad = norm_x * 1
+    stateGrad = 
+
+def layernorm_backward(out, gamma, var, )
