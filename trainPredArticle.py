@@ -170,29 +170,6 @@ def main():
                 f"Epoch [{epoch+1}/{numEpochs}], Batch [{stepNum + 1}/{numBatches}] ({100.0 * (stepNum + 1) /numBatches:.4f}%), Last Loss: {lastLoss}, Last Tok/Sec: {lastTokSec}"
             )
 
-            # Print model grad
-            if False:
-                print(f"Model Init State Grad: {model.initState.grad.norm()}")
-                print(f"Model Init State Data: {model.initState.data.norm()}")
-
-                print(f" Model Embedding Grad: {model.embedding.grad.norm()}")
-                print(f" Model Embedding Data: {model.embedding.data.norm()}")
-
-                print(f"      Model I->H Grad: {model.ih.grad.norm()}")
-                print(f"      Model I->H Data: {model.ih.data.norm()}")
-
-                print(f"      Model H->H Grad: {model.hh.grad.norm()}")
-                print(f"      Model H->H Data: {model.hh.data.norm()}")
-
-                print(f"      Model Bias Grad: {model.bias.grad.norm()}")
-                print(f"      Model Bias Data: {model.bias.data.norm()}")
-
-                print(f"       Model Out Grad: {model.out.grad.norm()}")
-                print(f"       Model Out Data: {model.out.data.norm()}")
-
-                print(f"  Model Out Bias Grad: {model.outBias.grad.norm()}")
-                print(f"  Model Out Bias Data: {model.outBias.data.norm()}")
-
             start = perf_counter()
             batch = []
             adjustedBatchSize = min(batchSize, numPagesPerEpoch - numPages)

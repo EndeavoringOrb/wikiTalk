@@ -22,6 +22,40 @@ class Head(nn.Module):
 
         self.activation = nn.GELU()
 
+    def preCompute(self, tok_emb):
+        self.kPreComputed = self.key(tok_emb)
+        self.kPreComputed = self.activation(self.kPreComputed)
+        self.kPreComputed = self.kPreComputed.transpose(-2, -1) * self.kPreComputed.shape[-1] ** -0.5
+
+        self.vPreComputed = self.value(tok_emb)
+        self.vPreComputed = self.activation(self.vPreComputed)
+
+    @profile
+    def forwardPreComputed(self, x, tokens):
+        # x has size (batch, channels)
+        # output of size (batch, head size)
+        k = self.kPreComputed[tokens]
+
+        q = self.query(x)  # (B,channels,hs)
+        q = self.activation(q)
+
+        # compute attention scores ("affinities")
+        wei = (
+            q @ k
+        )  # (B, C, hs) @ (B, hs, 1) -> (B, C, 1)
+        wei = F.softmax(wei, dim=-2)  # (B, C, 1)
+        # wei = self.dropout(wei)
+
+        # perform the weighted aggregation of the values
+        v = self.vPreComputed[tokens]
+
+        out = wei @ v  # (B, C, 1) @ (B, 1, hs) -> (B, C, hs)
+        out = self.activation(out)
+
+        out = self.proj(out).squeeze()  # (B, C)
+
+        return out
+
     @profile
     def forward(self, x, tok_emb):
         # x has size (batch, channels)
@@ -98,12 +132,12 @@ class Block(nn.Module):
         self.ln3 = nn.LayerNorm(embdSize)
     
     def preCompute(self, embeddingTable):
-        self.ln_embed = self.ln2(embeddingTable)
+        self.ln2_embed = self.ln2(embeddingTable)
 
     @profile
     def forwardPreComputed(self, x):
         state, tokens = x
-        state = state + self.sa(self.ln1(state), self.ln2(tok_emb))
+        state = state + self.sa(self.ln1(state), self.ln2_embed[tokens])
         state = state + self.ffwd(self.ln3(state))
         return (state, tokens)
 

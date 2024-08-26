@@ -60,28 +60,6 @@ def getInfo(folder, vocab, replace):
     # return numPages, the characters in newVocab that are not in vocab
     return numPages, numValidPages, newVocab
 
-
-def wikiLoader(folder):
-    for subFolder in os.listdir(folder):
-        if subFolder.endswith(".txt"):
-            continue
-        for file in os.listdir(f"{folder}/{subFolder}"):
-            if file.endswith(".txt"):
-                continue
-
-            # Load the Wikipedia dump
-            dump: mwxml.Dump = mwxml.Dump.from_file(f"{folder}/{subFolder}/{file}")
-
-            # Iterate through pages
-            for i, page in enumerate(dump):
-                if page.namespace == 0 and page.redirect == None:
-                    title = page.title
-                    text: str = ""
-                    for revision in page:
-                        text = revision.text
-
-                    yield title, text
-
 def wikiLoader(folder, vocab, replace):
     for subFolder in os.listdir(folder):
         if subFolder.endswith(".txt"):
