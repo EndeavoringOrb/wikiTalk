@@ -20,7 +20,7 @@ class Head(nn.Module):
 
         self.proj = nn.Linear(headSize, 1)
 
-        self.activation = nn.GELU()
+        self.activation = nn.Tanh()
 
     def preCompute(self, tok_emb):
         self.kPreComputed = self.key(tok_emb)
@@ -30,7 +30,7 @@ class Head(nn.Module):
         self.vPreComputed = self.value(tok_emb)
         self.vPreComputed = self.activation(self.vPreComputed)
 
-    @profile
+    #@profile
     def forwardPreComputed(self, x, tokens):
         # x has size (batch, channels)
         # output of size (batch, head size)
@@ -56,7 +56,7 @@ class Head(nn.Module):
 
         return out
 
-    @profile
+    #@profile
     def forward(self, x, tok_emb):
         # x has size (batch, channels)
         # tok_emb has size (batch, channels)
@@ -94,7 +94,7 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([Head(embdSize, headSize, device) for _ in range(nHead)])
         self.proj = nn.Linear(embdSize * nHead, embdSize)
 
-    @profile
+    #@profile
     def forward(self, x, tok_emb):
         x = x.unsqueeze(dim=-1)
         out = torch.cat([h(x, tok_emb) for h in self.heads], dim=-1)
@@ -109,11 +109,11 @@ class FeedFoward(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(embdSize, 4 * embdSize),
-            nn.GELU(),
+            nn.Tanh(),
             nn.Linear(4 * embdSize, embdSize),
         )
 
-    @profile
+    #@profile
     def forward(self, x):
         return self.net(x)
 
@@ -134,14 +134,14 @@ class Block(nn.Module):
     def preCompute(self, embeddingTable):
         self.ln2_embed = self.ln2(embeddingTable)
 
-    @profile
+    #@profile
     def forwardPreComputed(self, x):
         state, tokens = x
         state = state + self.sa(self.ln1(state), self.ln2_embed[tokens])
         state = state + self.ffwd(self.ln3(state))
         return (state, tokens)
 
-    @profile
+    #@profile
     def forward(self, x):
         state, tok_emb = x
         state = state + self.sa(self.ln1(state), self.ln2(tok_emb))
@@ -158,8 +158,7 @@ class RecurrentTransformer(nn.Module):
         # each token directly reads off the logits for the next token from a lookup table, embeddings are not ternary
         data = torch.normal(0, 0.02, (vocabSize, embdSize))
         self.token_embedding_table = nn.Parameter(data)
-        #self.token_embedding_table = nn.Embedding(vocabSize, embdSize)
-        
+
         self.blocks = nn.Sequential(
             *[Block(embdSize, nHead, headSize, device) for _ in range(nLayer)]
         )
@@ -195,9 +194,9 @@ class RecurrentTransformer(nn.Module):
 
         return state, logits
 
-    @profile
+    #@profile
     def nextState(self, state, idx):
-        tok_emb = self.token_embedding_table(idx)  # (B,C)
+        tok_emb = self.token_embedding_table[idx]  # (B,C)
         state, tok_emb = self.blocks((state, tok_emb))  # (B,C)
         state = self.ln_f(state)  # (B,C), this is the new state
         return state
@@ -210,7 +209,7 @@ class RecurrentTransformer(nn.Module):
         #for block in self.blocks:
         #    block.preCompute()
 
-    @profile
+    #@profile
     def train(self, state, tokens, criterion):
         loss = 0
         numSteps = len(tokens[0])

@@ -26,11 +26,12 @@ def getNumPages(folder):
         numPages = int(text.split(" ")[0].strip())
     return numPages
 
+
 @torch.no_grad
 @profile
 def main():
     # Settings
-    modelSavePath = "models/tokenPredArticle/current"
+    modelSavePath = "models/tokenPredArticle2/current"
 
     device = torch.device(
         "cpu"
@@ -38,30 +39,39 @@ def main():
 
     # Initialize the model, loss function, and optimizer
     print("Initializing model...")
-    model: RecurrentTransformer = torch.load(f"{modelSavePath}/model.pt", weights_only=False, map_location=device)
+    model: RecurrentTransformer = torch.load(
+        f"{modelSavePath}/model.pt", weights_only=False, map_location=device
+    )
     clearLines(1)
     print(f"Sub-Model Parameter Information:")
     print(f"Vocab Size: {model.vocabSize:,}")
     print(f"Hidden Dim: {model.hiddenSize:,}")
-    print(f"# Embedding Params: {model.vocabSize * model.hiddenSize:,}")
-    print(f"# Input->Hidden Params: {model.hiddenSize * model.hiddenSize:,}")
-    print(f"# Hidden->Hidden Params: {model.hiddenSize * model.hiddenSize:,}")
-    print(f"# Hidden Bias Params: {model.hiddenSize:,}")
-    print(f"# Out Projection Params: {model.hiddenSize * model.vocabSize:,}")
-    print(
-        f"Model Total # Params: {sum([p.numel() for p in model.parameters()]):,}"
-    )
+    print(f"Model Total # Params: {sum([p.numel() for p in model.parameters()]):,}")
 
     while True:
         state = model.initState
         numTokens = int(input("\n\nEnter # of tokens to generate: "))
+        print(f"Generating...")
+
+        start = perf_counter()
+
+        tokens = []
 
         for i in range(numTokens):
             pred = model.getPreds(state)
             probs = F.softmax(pred, dim=0)
             token = torch.multinomial(probs, 1)
-            print(decode([token.item()]), end="", flush=True)
+            tokens.append(token)
             state = model.nextState(state, token)
+
+        elapsed = perf_counter() - start
+
+        print(f"Generated {numTokens} tokens in {elapsed:.2f} s.")
+        print(f"{numTokens / elapsed:.2f} tok/sec\n")
+
+        text = decode([token.item() for token in tokens])
+        print(text, flush=True)
+
 
 if __name__ == "__main__":
     main()

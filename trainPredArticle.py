@@ -66,12 +66,12 @@ def getEmbeddingInit(rows, cols, numSteps):
 def main():
     # Hyperparameters
     vocabSize = len(vocab)
-    hiddenSize = 16
+    hiddenSize = 32
     numEpochs = 1_000_000
     learningRate = 2e-4
     batchSize = 1
     nHead = 1
-    headSize = 8
+    headSize = 16
     nLayer = 1
 
     # Settings
