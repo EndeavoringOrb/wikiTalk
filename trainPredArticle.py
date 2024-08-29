@@ -70,9 +70,9 @@ def main():
     numEpochs = 1_000_000
     learningRate = 2e-4
     batchSize = 1
-    nHead = 1
-    headSize = 16
-    nLayer = 1
+    nHead = 4
+    headSize = 8
+    nLayer = 4
 
     # Settings
     modelLoadPath = "models/tokenPredArticle/current"
