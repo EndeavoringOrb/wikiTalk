@@ -68,24 +68,37 @@ def updateW(w, alpha, sigma, nTrials, seeds, A):
 def send_data(sock, data):
     # Encode data
     data_bytes = pickle.dumps(data)
-    # Create the header with message length (4 bytes)
-    header = struct.pack("!I", len(data_bytes))
-    # Send header and message
-    sock.sendall(header + data_bytes)
+    # Create the header with message length (8 bytes)
+    header = struct.pack("Q", len(data_bytes))
+    # Send header
+    sock.sendall(header)
+
+    # Send chunks
+    chunks = []
+    while len(data_bytes) > 0:
+        chunkLen = min(1024, len(data_bytes))
+        chunks.append(data_bytes[:chunkLen])
+        data_bytes = data_bytes[chunkLen:]
+    for chunk in chunks:
+        sock.sendall(chunk)
 
 
 def receive_data(sock):
     # Receive the header
-    header = sock.recv(4)
+    header = sock.recv(8)
     if not header:
         raise ConnectionResetError()
-    message_length = struct.unpack("!I", header)[0]
+    message_length = struct.unpack("Q", header)[0]
 
     # Receive the message
-    message = sock.recv(message_length)
-    if not message:
-        raise ConnectionResetError()
-    data = pickle.loads(message)
+    chunks = []
+    while message_length > 0:
+        chunkLen = min(1024, message_length)
+        chunk = sock.recv(chunkLen)
+        chunks.append(chunk)
+        message_length -= chunkLen
+
+    data = pickle.loads(b"".join(chunks))
 
     return data
 

@@ -11,13 +11,44 @@ def clearLines(numLines):
         print("\033[F\033[K", end="")
 
 
+def receive_data(sock):
+    # Receive the header
+    header = sock.recv(8)
+    if not header:
+        raise ConnectionResetError()
+    message_length = struct.unpack("Q", header)[0]
+
+    # Receive the message
+    chunks = []
+    while message_length > 0:
+        chunkLen = min(1024, message_length)
+        chunk = sock.recv(chunkLen)
+        if not chunk:
+            raise ConnectionResetError()
+        chunks.append(chunk)
+        message_length -= chunkLen
+
+    data = pickle.loads(b"".join(chunks))
+
+    return data
+
+
 def send_data(sock, data):
     # Encode data
     data_bytes = pickle.dumps(data)
-    # Create the header with message length (4 bytes)
-    header = struct.pack("!I", len(data_bytes))
-    # Send header and message
-    sock.sendall(header + data_bytes)
+    # Create the header with message length (8 bytes)
+    header = struct.pack("Q", len(data_bytes))
+    # Send header
+    sock.sendall(header)
+
+    # Send chunks
+    chunks = []
+    while len(data_bytes) > 0:
+        chunkLen = min(1024, len(data_bytes))
+        chunks.append(data_bytes[:chunkLen])
+        data_bytes = data_bytes[chunkLen:]
+    for chunk in chunks:
+        sock.sendall(chunk)
 
 
 # Training setup
@@ -57,6 +88,7 @@ print("Server started and listening")
 print("\nLOG:")
 print("\n" * 3)
 
+
 def updateLog():
     global log, updated
     clearLines(4)
@@ -68,6 +100,7 @@ def updateLog():
     print(f"# Clients: {numClients}")
     print("Checking for new connections")
     updated = False
+
 
 while True:
     # Handle any new connections
@@ -98,6 +131,14 @@ while True:
             new_clients_list.append(client_socket)
 
         updateLog()
+    
+    # Get new tokens
+    if len(sockets_list) > len(new_clients_list) + 1:
+        try:
+            fileNum, title, tokens = next(tokenLoader)
+        except StopIteration:
+            tokenLoader = loadTokens("tokenData")
+            fileNum, title, tokens = next(tokenLoader)
 
     # Broadcast done, weight request, seeds and nTrials for each client
     for i, client_socket in enumerate(sockets_list):
@@ -113,12 +154,6 @@ while True:
         if need_weights:
             receivingWeightsFrom = i
 
-        try:
-            fileNum, title, tokens = next(tokenLoader)
-        except StopIteration:
-            tokenLoader = loadTokens("tokenData")
-            fileNum, title, tokens = next(tokenLoader)
-
         send_data(
             client_socket,
             [False, need_weights, seeds, nTrials, i - 1, tokens, alpha, sigma],
@@ -133,14 +168,8 @@ while True:
         clearLines(1)
         print(f"Receiving data from {clients[client_socket]}")
         try:
-            header = client_socket.recv(4)
-            if not header:
-                raise ConnectionResetError()
-            message_length = struct.unpack("!I", header)[0]
-            message = client_socket.recv(message_length)
-            if not message:
-                raise ConnectionResetError()
-            data = pickle.loads(message)
+            data = receive_data(client_socket)
+
             if i == receivingWeightsFrom:
                 # If recieving weights, handle getting the weights
                 R, weights = data
@@ -202,7 +231,7 @@ while True:
                 header = notified_socket.recv(4)
                 if not header:
                     raise ConnectionResetError()
-                message_length = struct.unpack("!I", header)[0]
+                message_length = struct.unpack("Q", header)[0]
                 message = notified_socket.recv(message_length)
                 if not message:
                     raise ConnectionResetError()
