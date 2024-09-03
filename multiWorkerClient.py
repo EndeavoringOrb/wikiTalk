@@ -186,14 +186,15 @@ try:
         # Receive normalized results
         clearLines(1)
         print("Waiting for normalized results")
-        A = receive_nparrays(server_socket)[0]
-        workerInfo = receive_data(server_socket)
+        success, workerInfo = receive_data(server_socket)
+        if success:
+            A = receive_nparrays(server_socket)[0]
 
-        # Update weights
-        clearLines(1)
-        print("Updating weights")
-        weights = updateW(weights, alpha, sigma, A, workerInfo)
-        clearLines(1)
+            # Update weights
+            clearLines(1)
+            print("Updating weights")
+            weights = updateW(weights, alpha, sigma, A, workerInfo)
+            clearLines(1)
 
     while True:
         print("Waiting for data")
