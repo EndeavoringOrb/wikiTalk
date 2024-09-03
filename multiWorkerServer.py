@@ -1,8 +1,11 @@
+import os
 import socket
 import select
 import struct
 import pickle
 import numpy as np
+from time import perf_counter
+from datetime import datetime
 from tokenizeWiki import loadTokens, vocab
 
 
@@ -162,11 +165,30 @@ def send_nparrays(sock, data: list[np.ndarray]):
         updateLog()
 
 
+def saveWeights(folder, weights):
+    # Get the current date and time
+    now = datetime.now()
+
+    # Convert to a string
+    date_time_str = now.strftime("%Y-%m-%d_%H-%M-%S")
+
+    # Make sure folder exists
+    folderpath = f"{folder}/checkpoints"
+    if not os.path.exists(folderpath):
+        os.makedirs(folderpath)
+
+    # Write to file
+    with open(f"{folderpath}/{date_time_str}.bin", "wb") as f:
+        pickle.dump(weights, f)
+
+
 # Training setup
 nTrials = 100
 alpha = 2e-4
 sigma = 0.01
 hiddenSize = 16
+checkPointSeconds = 1 * 60
+savePath = "multiWorkerModels/0"
 
 tokenLoader = loadTokens("tokenData")
 fileNum, title, tokens = next(tokenLoader)
@@ -195,6 +217,10 @@ receivingWeightsFrom = -1
 # Trackers setup
 mean = "N/A"
 log = []
+lastCheckpointTime = perf_counter()
+totalIters = 0
+totalSamples = 0
+
 
 print("Server started and listening")
 print("\nLOG:")
@@ -202,14 +228,19 @@ print("\n" * 3)
 
 
 def updateLog():
-    global log
-    clearLines(3)
+    global log, lastCheckpointTime, checkPointSeconds
+    clearLines(6)
     for line in log:
         print(line)
     log = []
     print()
-    print(f"Mean Reward: {mean}")
+    print(f"Iter #: {totalIters:,}")
+    print(f"Total # Samples Taken: {totalSamples:,}")
     print(f"# Clients: {numClients}")
+    print(
+        f"Time until next checkpoint: {checkPointSeconds - (perf_counter() - lastCheckpointTime):,.2f}"
+    )
+    print(f"Mean Reward: {mean}")
 
 
 while True:
@@ -246,6 +277,9 @@ while True:
             fileNum, title, tokens = next(tokenLoader)
     tokens = tokens[:200]
 
+    # Check if we want to get a checkpoint
+    requestCheckpoint = (perf_counter() - lastCheckpointTime) > checkPointSeconds
+
     # Broadcast done, weight request, seeds and nTrials for each client
     nSeeds = len(sockets_list) - 1 - len(new_clients_list)
     seeds = np.random.randint(0, 1_000_000_000, nSeeds)
@@ -255,11 +289,13 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
-        log.append(f"Sending data to {clients[client_socket]}")
-        updateLog()
-
         need_weights = (
-            True if receivingWeightsFrom == -1 and len(new_clients_list) > 0 else False
+            True
+            if (
+                receivingWeightsFrom == -1
+                and (len(new_clients_list) > 0 or requestCheckpoint)
+            )
+            else False
         )
 
         workerID = len(workerInfo)
@@ -279,9 +315,6 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
-        log.append(f"Receiving data from {clients[client_socket]}")
-        updateLog()
-
         R = receive_nparrays(client_socket)
         if R is not None:
             workerInfo[client_socket] = (
@@ -295,23 +328,24 @@ while True:
             continue
 
         if workerInfo[client_socket][0] == receivingWeightsFrom:
-            log.append(f"Receiving weights from {clients[client_socket]}")
-            updateLog()
-            # print(f"Receiving weights from {clients[client_socket]}")
             # If recieving weights, handle getting the weights
             weights = receive_nparrays(client_socket)
+            if weights is None:
+                if client_socket in workerInfo:
+                    del workerInfo[client_socket]
+                continue
+
+            if requestCheckpoint:
+                lastCheckpointTime = perf_counter()
+                saveWeights(savePath, weights)
 
             # send weights to new clients
             for new_client in new_clients_list:
-                # print(f"Sending data to new client {new_client}")
-                log.append(f"Sending data to new client {new_client}")
-                updateLog()
                 send_nparrays(new_client, weights)
                 send_data(
                     new_client,
                     [alpha, sigma, vocabSize, weightShapes, False],
                 )
-                # clearLines(1)
 
     # reset
     new_clients_list = []
@@ -328,13 +362,8 @@ while True:
             if client_socket == server_socket or client_socket in new_clients_list:
                 continue
 
-            log.append(f"Sending normalization failure to {clients[client_socket]}")
-            updateLog()
-
             send_data(client_socket, (success, []))
     else:
-        log.append(f"Calculating normalized rewards")
-        updateLog()
         R = np.concatenate(all_R)
         mean = np.mean(R)
         std = np.std(R)
@@ -350,39 +379,10 @@ while True:
             if client_socket == server_socket or client_socket in new_clients_list:
                 continue
 
-            log.append(f"Sending normalized rewards to {clients[client_socket]}")
-            updateLog()
-
             send_data(client_socket, (success, info))
             send_nparrays(client_socket, [A])
 
-    """
-    for notified_socket in read_sockets:
-        if notified_socket == server_socket:
-            client_socket, client_address = server_socket.accept()
-            print(f"New connection from {client_address}")
-            sockets_list.append(client_socket)
-            clients[client_socket] = client_address
-        else:
-            try:
-                header = notified_socket.recv(4)
-                if not header:
-                    raise ConnectionResetError()
-                message_length = struct.unpack("Q", header)[0]
-                message = notified_socket.recv(message_length)
-                if not message:
-                    raise ConnectionResetError()
-                data = pickle.loads(message)
-                print(f"Received message from {clients[notified_socket]}: {data}")
-                send_data(notified_socket, f"Echo: {data}")
-            except:
-                print(f"Connection closed from {clients[notified_socket]}")
-                sockets_list.remove(notified_socket)
-                del clients[notified_socket]
-                notified_socket.close()
-
-    for notified_socket in exception_sockets:
-        sockets_list.remove(notified_socket)
-        del clients[notified_socket]
-        notified_socket.close()
-    """
+        # Increment counter
+        totalIters += 1
+        totalSamples += len(A)
+        updateLog()
