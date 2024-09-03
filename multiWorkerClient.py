@@ -46,16 +46,17 @@ def generate(weights, nTokens, vocabSize):
     return generated_tokens
 
 
-def updateW(w, alpha, sigma, nTrials, seeds, A):
+def updateW(w, alpha, sigma, A, workerInfo):
     wUpdate = [np.zeros_like(item) for item in w]
 
-    for workerIdx, seed in enumerate(seeds):
+    AIndex = 0
+
+    for workerIdx, seed, nTrials in workerInfo:
         np.random.seed(seed)
         for trial in range(nTrials):
             for i in range(len(wUpdate)):
-                wUpdate[i] += (
-                    np.random.randn(*wUpdate[i].shape) * A[workerIdx * nTrials + trial]
-                )
+                wUpdate[i] += np.random.randn(*wUpdate[i].shape) * A[AIndex + trial]
+        AIndex += nTrials
 
     nPop = len(A)
 
@@ -218,11 +219,12 @@ try:
         clearLines(1)
         print("Waiting for normalized results")
         A = receive_nparrays(server_socket)[0]
+        workerInfo = receive_data(server_socket)
 
         # Update weights
         clearLines(1)
         print("Updating weights")
-        weights = updateW(weights, alpha, sigma, nTrials, seeds, A)
+        weights = updateW(weights, alpha, sigma, A, workerInfo)
         clearLines(1)
 
 finally:

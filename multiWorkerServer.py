@@ -261,6 +261,10 @@ while True:
     tokens = tokens[:200]
 
     # Broadcast done, weight request, seeds and nTrials for each client
+    nSeeds = len(sockets_list) - 1 - len(new_clients_list)
+    seeds = np.random.randint(0, 1_000_000_000, nSeeds)
+    workerInfo = {}
+
     for i, client_socket in enumerate(sockets_list):
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
@@ -274,25 +278,31 @@ while True:
         if need_weights:
             receivingWeightsFrom = i
 
+        workerID = len(workerInfo)
+        workerInfo[client_socket] = (workerID, seeds[workerID])
+
         send_data(
             client_socket,
-            [False, need_weights, seeds, nTrials, i - 1, tokens, alpha, sigma],
+            [False, need_weights, seeds, nTrials, workerID, tokens, alpha, sigma],
         )
+        workerID += 1
 
     # Receive the rewards from each client
-    all_R = []
     for i, client_socket in enumerate(sockets_list):
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
         clearLines(1)
         print(f"Receiving data from {clients[client_socket]}")
-        R = receive_nparrays(client_socket)[0]
+        R = receive_nparrays(client_socket)
+        if R is not None:
+            workerInfo[client_socket] = (workerInfo[client_socket][0], workerInfo[client_socket][1], R[0])
+        else:
+            del workerInfo[client_socket]
 
         if i == receivingWeightsFrom:
             # If recieving weights, handle getting the weights
             weights = receive_nparrays(client_socket)
-            all_R.append(R)
 
             # send weights to new clients
             for new_client in new_clients_list:
@@ -307,8 +317,8 @@ while True:
             # reset
             new_clients_list = []
             receivingWeightsFrom = -1
-        else:
-            all_R.append(R)
+
+    all_R = list([item[2] for item in workerInfo.values()])
 
     # Normalize rewards
     if len(all_R) == 0:
@@ -321,6 +331,11 @@ while True:
         std = np.std(R)
         A = (R - mean) / std
         updated = True
+    
+    info = []
+    for k, v in workerInfo.items():
+        info.append((v[0], v[1], len(v[2])))
+    info = sorted(info, key=lambda x: x[0])
 
     # Send A to each client to update their weights
     for client_socket in sockets_list:
@@ -330,6 +345,7 @@ while True:
         clearLines(1)
         print(f"Sending normalized rewards to {clients[client_socket]}")
         send_nparrays(client_socket, [A])
+        send_data(client_socket, info)
 
     """
     for notified_socket in read_sockets:
