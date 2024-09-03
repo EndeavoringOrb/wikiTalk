@@ -184,10 +184,16 @@ try:
 
     if not firstClient:
         # Receive normalized results
+        clearLines(1)
+        print("Waiting for normalized results")
         A = receive_nparrays(server_socket)[0]
+        workerInfo = receive_data(server_socket)
 
         # Update weights
-        w = updateW(weights, alpha, sigma, nTrials, seeds, A)
+        clearLines(1)
+        print("Updating weights")
+        weights = updateW(weights, alpha, sigma, A, workerInfo)
+        clearLines(1)
 
     while True:
         print("Waiting for data")

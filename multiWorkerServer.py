@@ -298,7 +298,9 @@ while True:
         if R is not None:
             workerInfo[client_socket] = (workerInfo[client_socket][0], workerInfo[client_socket][1], R[0])
         else:
-            del workerInfo[client_socket]
+            if client_socket in workerInfo:
+                del workerInfo[client_socket]
+            continue
 
         if i == receivingWeightsFrom:
             # If recieving weights, handle getting the weights
