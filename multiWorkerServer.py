@@ -15,7 +15,6 @@ def receive_nparrays(sock):
     global log
     global sockets_list
     global clients
-    global updated
     global numClients
     try:
         # Receive the header
@@ -54,14 +53,13 @@ def receive_nparrays(sock):
         del clients[sock]
         sock.close()
         numClients -= 1
-        updated = True
+        updateLog()
 
 
 def receive_data(sock):
     global log
     global sockets_list
     global clients
-    global updated
     global numClients
     try:
         # Receive the header
@@ -90,14 +88,13 @@ def receive_data(sock):
         del clients[sock]
         sock.close()
         numClients -= 1
-        updated = True
+        updateLog()
 
 
 def send_data(sock, data):
     global log
     global sockets_list
     global clients
-    global updated
     global numClients
     try:
         # Encode data
@@ -123,14 +120,13 @@ def send_data(sock, data):
         del clients[sock]
         sock.close()
         numClients -= 1
-        updated = True
+        updateLog()
 
 
 def send_nparrays(sock, data: list[np.ndarray]):
     global log
     global sockets_list
     global clients
-    global updated
     global numClients
     try:
         # Encode data
@@ -163,7 +159,7 @@ def send_nparrays(sock, data: list[np.ndarray]):
         del clients[sock]
         sock.close()
         numClients -= 1
-        updated = True
+        updateLog()
 
 
 # Training setup
@@ -198,7 +194,6 @@ receivingWeightsFrom = -1
 
 # Trackers setup
 mean = "N/A"
-updated = True
 log = []
 
 print("Server started and listening")
@@ -207,22 +202,18 @@ print("\n" * 3)
 
 
 def updateLog():
-    global log, updated
-    clearLines(4)
+    global log
+    clearLines(3)
     for line in log:
         print(line)
     log = []
     print()
-    print(f"Mean: {mean}")
+    print(f"Mean Reward: {mean}")
     print(f"# Clients: {numClients}")
-    print("Checking for new connections")
-    updated = False
 
 
 while True:
     # Handle any new connections
-    if updated:
-        updateLog()
     read_sockets, _, exception_sockets = select.select(
         sockets_list, [], sockets_list, 0.1
     )
@@ -236,7 +227,7 @@ while True:
         sockets_list.append(client_socket)
         clients[client_socket] = client_address
         numClients += 1
-        updated = True
+        updateLog()
 
         if numClients == 1:
             # Set seeds again with new length
@@ -269,17 +260,19 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
-        clearLines(1)
-        print(f"Sending data to {clients[client_socket]}")
+        # clearLines(1)
+        log.append(f"Sending data to {clients[client_socket]}")
+        updateLog()
+        # print(f"Sending data to {clients[client_socket]}")
         need_weights = (
             True if receivingWeightsFrom == -1 and len(new_clients_list) > 0 else False
         )
 
-        if need_weights:
-            receivingWeightsFrom = i
-
         workerID = len(workerInfo)
         workerInfo[client_socket] = (workerID, seeds[workerID])
+
+        if need_weights:
+            receivingWeightsFrom = workerID
 
         send_data(
             client_socket,
@@ -292,48 +285,58 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
-        clearLines(1)
-        print(f"Receiving data from {clients[client_socket]}")
+        # clearLines(1)
+        log.append(f"Receiving data from {clients[client_socket]}")
+        updateLog()
+        # print(f"Receiving data from {clients[client_socket]}")
         R = receive_nparrays(client_socket)
         if R is not None:
-            workerInfo[client_socket] = (workerInfo[client_socket][0], workerInfo[client_socket][1], R[0])
+            workerInfo[client_socket] = (
+                workerInfo[client_socket][0],
+                workerInfo[client_socket][1],
+                R[0],
+            )
         else:
             if client_socket in workerInfo:
                 del workerInfo[client_socket]
             continue
 
-        if i == receivingWeightsFrom:
+        if workerInfo[client_socket][0] == receivingWeightsFrom:
+            log.append(f"Receiving weights from {clients[client_socket]}")
+            updateLog()
+            # print(f"Receiving weights from {clients[client_socket]}")
             # If recieving weights, handle getting the weights
             weights = receive_nparrays(client_socket)
 
             # send weights to new clients
             for new_client in new_clients_list:
-                print(f"Sending data to new client {new_client}")
-                send_nparrays(client_socket, weights)
+                # print(f"Sending data to new client {new_client}")
+                log.append(f"Sending data to new client {new_client}")
+                updateLog()
+                send_nparrays(new_client, weights)
                 send_data(
                     new_client,
                     [seeds, nTrials, alpha, sigma, vocabSize, weightShapes, False],
                 )
-                clearLines(1)
+                # clearLines(1)
 
-            # reset
-            new_clients_list = []
-            receivingWeightsFrom = -1
-
-    all_R = list([item[2] for item in workerInfo.values()])
+    # reset
+    new_clients_list = []
+    receivingWeightsFrom = -1
 
     # Normalize rewards
+    all_R = list([item[2] for item in workerInfo.values()])
+
     if len(all_R) == 0:
         A = np.array([])
     else:
-        clearLines(1)
-        print(f"Calculating normalized rewards")
+        log.append(f"Calculating normalized rewards")
+        updateLog()
         R = np.concatenate(all_R)
         mean = np.mean(R)
         std = np.std(R)
         A = (R - mean) / std
-        updated = True
-    
+
     info = []
     for k, v in workerInfo.items():
         info.append((v[0], v[1], len(v[2])))
@@ -344,8 +347,9 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
-        clearLines(1)
-        print(f"Sending normalized rewards to {clients[client_socket]}")
+        log.append(f"Sending normalized rewards to {clients[client_socket]}")
+        updateLog()
+
         send_nparrays(client_socket, [A])
         send_data(client_socket, info)
 

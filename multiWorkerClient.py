@@ -217,6 +217,7 @@ try:
         print("Sending results")
         if send_weights:
             send_nparrays(server_socket, [R])
+            print("Sending weights")
             send_nparrays(server_socket, weights)
         else:
             send_nparrays(server_socket, [R])
