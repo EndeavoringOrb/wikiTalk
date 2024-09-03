@@ -218,9 +218,6 @@ while True:
         sockets_list, [], sockets_list, 0.1
     )
 
-    # Set seeds
-    seeds = np.random.randint(0, 1_000_000_000, len(sockets_list) - 1)
-
     if server_socket in read_sockets:
         client_socket, client_address = server_socket.accept()
         log.append(f"New connection from {client_address}")
@@ -230,12 +227,10 @@ while True:
         updateLog()
 
         if numClients == 1:
-            # Set seeds again with new length
-            seeds = np.random.randint(0, 1_000_000_000, len(sockets_list) - 1)
             send_nparrays(client_socket, weights)
             send_data(
                 client_socket,
-                [seeds, nTrials, alpha, sigma, vocabSize, weightShapes, True],
+                [alpha, sigma, vocabSize, weightShapes, True],
             )
         else:
             new_clients_list.append(client_socket)
@@ -260,10 +255,9 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
-        # clearLines(1)
         log.append(f"Sending data to {clients[client_socket]}")
         updateLog()
-        # print(f"Sending data to {clients[client_socket]}")
+
         need_weights = (
             True if receivingWeightsFrom == -1 and len(new_clients_list) > 0 else False
         )
@@ -281,14 +275,13 @@ while True:
         workerID += 1
 
     # Receive the rewards from each client
-    for i, client_socket in enumerate(sockets_list):
+    for client_socket in sockets_list:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
-        # clearLines(1)
         log.append(f"Receiving data from {clients[client_socket]}")
         updateLog()
-        # print(f"Receiving data from {clients[client_socket]}")
+
         R = receive_nparrays(client_socket)
         if R is not None:
             workerInfo[client_socket] = (
@@ -316,7 +309,7 @@ while True:
                 send_nparrays(new_client, weights)
                 send_data(
                     new_client,
-                    [seeds, nTrials, alpha, sigma, vocabSize, weightShapes, False],
+                    [alpha, sigma, vocabSize, weightShapes, False],
                 )
                 # clearLines(1)
 
@@ -327,7 +320,7 @@ while True:
     # Normalize rewards
     all_R = list([item[2] for item in workerInfo.values()])
 
-    success = (len(all_R) != 0)
+    success = len(all_R) != 0
     if not success:
         A = np.array([])
         # Send A to each client to update their weights
@@ -362,7 +355,6 @@ while True:
 
             send_data(client_socket, (success, info))
             send_nparrays(client_socket, [A])
-        
 
     """
     for notified_socket in read_sockets:

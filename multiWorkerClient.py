@@ -172,11 +172,10 @@ server_socket.connect(("130.215.211.30", 8080))
 server_socket.settimeout(10)
 
 try:
-    clearLines(1)
     print("Waiting for initial data")
     # Receive initial data
     weights: list[np.ndarray] = receive_nparrays(server_socket)
-    seeds, nTrials, alpha, sigma, vocabSize, weightShapes, firstClient = receive_data(
+    alpha, sigma, vocabSize, weightShapes, firstClient = receive_data(
         server_socket
     )
     for i in range(len(weights)):
@@ -184,17 +183,14 @@ try:
 
     if not firstClient:
         # Receive normalized results
-        clearLines(1)
         print("Waiting for normalized results")
         success, workerInfo = receive_data(server_socket)
         if success:
             A = receive_nparrays(server_socket)[0]
 
             # Update weights
-            clearLines(1)
             print("Updating weights")
             weights = updateW(weights, alpha, sigma, A, workerInfo)
-            clearLines(1)
 
     while True:
         print("Waiting for data")
@@ -208,13 +204,11 @@ try:
         np.random.seed(seeds[client_id])  # Set seed
         R = np.zeros(nTrials)  # Init reward array
 
-        clearLines(1)
         for trial in trange(nTrials, desc="Doing trials"):
             w_try = [item + sigma * np.random.randn(*item.shape) for item in weights]
             R[trial] = f(tokens, w_try, vocabSize)
 
         # Send results
-        clearLines(1)
         print("Sending results")
         if send_weights:
             send_nparrays(server_socket, [R])
@@ -224,7 +218,6 @@ try:
             send_nparrays(server_socket, [R])
 
         # Receive normalized results
-        clearLines(1)
         print("Waiting for normalized results")
         success, workerInfo = receive_data(server_socket)
         if not success:
@@ -232,10 +225,8 @@ try:
         A = receive_nparrays(server_socket)[0]
 
         # Update weights
-        clearLines(1)
         print("Updating weights")
         weights = updateW(weights, alpha, sigma, A, workerInfo)
-        clearLines(1)
 
 finally:
     server_socket.close()
