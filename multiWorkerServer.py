@@ -11,24 +11,34 @@ def clearLines(numLines):
         print("\033[F\033[K", end="")
 
 
-def receive_nparray(sock):
+def receive_nparrays(sock):
     # Receive the header
     header = sock.recv(8)
     if not header:
         raise ConnectionResetError()
-    message_length = struct.unpack("Q", header)[0]
+    num_items = struct.unpack("Q", header)[0]
 
-    # Receive the message
-    chunks = []
-    while message_length > 0:
-        chunkLen = min(CHUNK_SIZE, message_length)
-        chunk = sock.recv(chunkLen)
-        if not chunk:
+    data = []
+
+    for i in range(num_items):
+        # Receive the header
+        header = sock.recv(8)
+        if not header:
             raise ConnectionResetError()
-        chunks.append(chunk)
-        message_length -= chunkLen
+        item_len = struct.unpack("Q", header)[0]
 
-    data = np.frombuffer(b"".join(chunks), dtype=np.float32)
+        # Receive the message
+        chunks = []
+        while item_len > 0:
+            chunkLen = min(CHUNK_SIZE, item_len)
+            chunk = sock.recv(chunkLen)
+            if not chunk:
+                raise ConnectionResetError()
+            chunks.append(chunk)
+            item_len -= chunkLen
+
+        item = np.frombuffer(b"".join(chunks), dtype=np.float32)
+        data.append(item)
 
     return data
 
@@ -74,23 +84,30 @@ def send_data(sock, data):
         sock.sendall(chunk)
 
 
-def send_nparray(sock, data: np.ndarray):
+def send_nparrays(sock, data: np.ndarray):
     # Encode data
-    data_bytes = data.tobytes()
-    # Create the header with message length (8 bytes)
+    data_bytes = [item.tobytes() for item in data]
+    # Create the header with number of arrays (8 bytes)
     data_len = len(data_bytes)
     header = struct.pack("Q", data_len)
     # Send header
     sock.sendall(header)
 
-    # Send chunks
-    chunks = []
-    while len(data_bytes) > 0:
-        chunkLen = min(CHUNK_SIZE, len(data_bytes))
-        chunks.append(data_bytes[:chunkLen])
-        data_bytes = data_bytes[chunkLen:]
-    for chunk in chunks:
-        sock.sendall(chunk)
+    for item_bytes in data_bytes:
+        # Create the header with number of arrays (8 bytes)
+        item_len = len(item_bytes)
+        header = struct.pack("Q", item_len)
+        # Send header
+        sock.sendall(header)
+
+        # Send chunks
+        chunks = []
+        while len(item_bytes) > 0:
+            chunkLen = min(CHUNK_SIZE, len(item_bytes))
+            chunks.append(item_bytes[:chunkLen])
+            item_bytes = item_bytes[chunkLen:]
+        for chunk in chunks:
+            sock.sendall(chunk)
 
 
 # Training setup
@@ -167,7 +184,7 @@ while True:
         if numClients == 1:
             # Set seeds again with new length
             seeds = np.random.randint(0, 1_000_000_000, len(sockets_list) - 1)
-            send_nparray(client_socket, weights)
+            send_nparrays(client_socket, weights)
             send_data(client_socket, [seeds, nTrials, alpha, sigma, vocabSize, True])
         else:
             new_clients_list.append(client_socket)
@@ -211,17 +228,17 @@ while True:
         clearLines(1)
         print(f"Receiving data from {clients[client_socket]}")
         try:
-            R = receive_data(client_socket)
+            R = receive_nparrays(client_socket)[0]
 
             if i == receivingWeightsFrom:
                 # If recieving weights, handle getting the weights
-                weights = receive_nparray(client_socket)
+                weights = receive_nparrays(client_socket)
                 all_R.append(R)
 
                 # send weights to new clients
                 for new_client in new_clients_list:
                     print(f"Sending data to new client {new_client}")
-                    send_nparray(client_socket, weights)
+                    send_nparrays(client_socket, weights)
                     send_data(
                         new_client,
                         [seeds, nTrials, alpha, sigma, vocabSize, False],
@@ -261,7 +278,7 @@ while True:
 
         clearLines(1)
         print(f"Sending normalized rewards to {clients[client_socket]}")
-        send_nparray(client_socket, A)
+        send_nparrays(client_socket, [A])
 
     """
     for notified_socket in read_sockets:

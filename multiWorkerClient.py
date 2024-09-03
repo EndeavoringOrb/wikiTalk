@@ -65,24 +65,34 @@ def updateW(w, alpha, sigma, nTrials, seeds, A):
     return w
 
 
-def receive_nparray(sock):
+def receive_nparrays(sock):
     # Receive the header
     header = sock.recv(8)
     if not header:
         raise ConnectionResetError()
-    message_length = struct.unpack("Q", header)[0]
+    num_items = struct.unpack("Q", header)[0]
 
-    # Receive the message
-    chunks = []
-    while message_length > 0:
-        chunkLen = min(CHUNK_SIZE, message_length)
-        chunk = sock.recv(chunkLen)
-        if not chunk:
+    data = []
+
+    for i in range(num_items):
+        # Receive the header
+        header = sock.recv(8)
+        if not header:
             raise ConnectionResetError()
-        chunks.append(chunk)
-        message_length -= chunkLen
+        item_len = struct.unpack("Q", header)[0]
 
-    data = np.frombuffer(b"".join(chunks), dtype=np.float32)
+        # Receive the message
+        chunks = []
+        while item_len > 0:
+            chunkLen = min(CHUNK_SIZE, item_len)
+            chunk = sock.recv(chunkLen)
+            if not chunk:
+                raise ConnectionResetError()
+            chunks.append(chunk)
+            item_len -= chunkLen
+
+        item = np.frombuffer(b"".join(chunks), dtype=np.float32)
+        data.append(item)
 
     return data
 
@@ -128,23 +138,30 @@ def send_data(sock, data):
         sock.sendall(chunk)
 
 
-def send_nparray(sock, data: np.ndarray):
+def send_nparrays(sock, data: np.ndarray):
     # Encode data
-    data_bytes = data.tobytes()
-    # Create the header with message length (8 bytes)
+    data_bytes = [item.tobytes() for item in data]
+    # Create the header with number of arrays (8 bytes)
     data_len = len(data_bytes)
     header = struct.pack("Q", data_len)
     # Send header
     sock.sendall(header)
 
-    # Send chunks
-    chunks = []
-    while len(data_bytes) > 0:
-        chunkLen = min(CHUNK_SIZE, len(data_bytes))
-        chunks.append(data_bytes[:chunkLen])
-        data_bytes = data_bytes[chunkLen:]
-    for chunk in chunks:
-        sock.sendall(chunk)
+    for item_bytes in data_bytes:
+        # Create the header with number of arrays (8 bytes)
+        item_len = len(item_bytes)
+        header = struct.pack("Q", item_len)
+        # Send header
+        sock.sendall(header)
+
+        # Send chunks
+        chunks = []
+        while len(item_bytes) > 0:
+            chunkLen = min(CHUNK_SIZE, len(item_bytes))
+            chunks.append(item_bytes[:chunkLen])
+            item_bytes = item_bytes[chunkLen:]
+        for chunk in chunks:
+            sock.sendall(chunk)
 
 
 print("Connecting to server")
@@ -157,12 +174,12 @@ try:
     clearLines(1)
     print("Waiting for initial data")
     # Receive initial data
-    weights = receive_nparray(server_socket)
+    weights = receive_nparrays(server_socket)
     seeds, nTrials, alpha, sigma, vocabSize, firstClient = receive_data(server_socket)
 
     if not firstClient:
         # Receive normalized results
-        A = receive_nparray(server_socket)
+        A = receive_nparrays(server_socket)[0]
 
         # Update weights
         w = updateW(weights, alpha, sigma, nTrials, seeds, A)
@@ -188,15 +205,15 @@ try:
         clearLines(1)
         print("Sending results")
         if send_weights:
-            send_data(server_socket, R)
-            send_nparray(server_socket, weights)
+            send_nparrays(server_socket, [R])
+            send_nparrays(server_socket, weights)
         else:
-            send_data(server_socket, R)
+            send_nparrays(server_socket, [R])
 
         # Receive normalized results
         clearLines(1)
         print("Waiting for normalized results")
-        A = receive_nparray(server_socket)
+        A = receive_nparrays(server_socket)[0]
 
         # Update weights
         clearLines(1)
