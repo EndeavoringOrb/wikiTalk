@@ -26,7 +26,8 @@ alpha = 2e-4
 sigma = 0.01
 hiddenSize = 16
 
-tokens = [0, 1, 2, 3, 4, 5, 6, 7]
+tokenLoader = loadTokens("tokenData")
+fileNum, title, tokens = next(tokenLoader)
 vocabSize = len(vocab.vocab)
 
 model_initState = np.random.random((hiddenSize))
@@ -39,6 +40,7 @@ weights = [model_initState, model_ih, model_hh, model_out]
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.bind(("0.0.0.0", 8080))
 server_socket.listen(5)
+server_socket.settimeout(10)
 
 sockets_list = [server_socket]
 clients = {}
@@ -55,18 +57,22 @@ print("Server started and listening")
 print("\nLOG:")
 print("\n" * 3)
 
+def updateLog():
+    global log, updated
+    clearLines(4)
+    for line in log:
+        print(line)
+    log = []
+    print()
+    print(f"Mean: {mean}")
+    print(f"# Clients: {numClients}")
+    print("Checking for new connections")
+    updated = False
+
 while True:
     # Handle any new connections
     if updated:
-        clearLines(4)
-        for line in log:
-            print(line)
-        log = []
-        print()
-        print(f"Mean: {mean}")
-        print(f"# Clients: {numClients}")
-        print("Checking for new connections")
-        updated = False
+        updateLog()
     read_sockets, _, exception_sockets = select.select(
         sockets_list, [], sockets_list, 0.1
     )
@@ -91,11 +97,14 @@ while True:
         else:
             new_clients_list.append(client_socket)
 
+        updateLog()
+
     # Broadcast done, weight request, seeds and nTrials for each client
     for i, client_socket in enumerate(sockets_list):
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
+        clearLines(1)
         print(f"Sending data to {clients[client_socket]}")
         need_weights = (
             True if receivingWeightsFrom == -1 and len(new_clients_list) > 0 else False
@@ -104,11 +113,16 @@ while True:
         if need_weights:
             receivingWeightsFrom = i
 
+        try:
+            fileNum, title, tokens = next(tokenLoader)
+        except StopIteration:
+            tokenLoader = loadTokens("tokenData")
+            fileNum, title, tokens = next(tokenLoader)
+
         send_data(
             client_socket,
             [False, need_weights, seeds, nTrials, i - 1, tokens, alpha, sigma],
         )
-        clearLines(1)
 
     # Receive the rewards from each client
     all_R = []
@@ -116,6 +130,7 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
+        clearLines(1)
         print(f"Receiving data from {clients[client_socket]}")
         try:
             header = client_socket.recv(4)
@@ -145,26 +160,25 @@ while True:
                 receivingWeightsFrom = -1
             else:
                 all_R.append(data)
-            clearLines(1)
         except Exception as e:
-            clearLines(1)
             log.append(f"EXCEPTION: {e}")
             log.append(f"Connection closed from {clients[client_socket]}")
             sockets_list.remove(client_socket)
             del clients[client_socket]
             client_socket.close()
             numClients -= 1
+            updated = True
 
     # Normalize rewards
     if len(all_R) == 0:
         A = np.array([])
     else:
+        clearLines(1)
         print(f"Calculating normalized rewards")
         R = np.concatenate(all_R)
         mean = np.mean(R)
         std = np.std(R)
         A = (R - mean) / std
-        clearLines(1)
         updated = True
 
     # Send A to each client to update their weights
@@ -172,9 +186,9 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
+        clearLines(1)
         print(f"Sending normalized rewards to {clients[client_socket]}")
         send_data(client_socket, A)
-        clearLines(1)
 
     """
     for notified_socket in read_sockets:

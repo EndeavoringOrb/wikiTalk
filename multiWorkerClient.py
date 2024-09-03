@@ -95,6 +95,7 @@ server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.connect(("130.215.211.30", 8080))
 
 try:
+    clearLines(1)
     print("Waiting for initial data")
     # Receive initial data
     weights, seeds, nTrials, alpha, sigma, vocabSize, firstClient = receive_data(
@@ -120,11 +121,13 @@ try:
         np.random.seed(seeds[client_id])  # Set seed
         R = np.zeros(nTrials)  # Init reward array
 
+        clearLines(1)
         for trial in trange(nTrials, desc="Doing trials"):
             w_try = [item + sigma * np.random.randn(*item.shape) for item in weights]
             R[trial] = f(tokens, w_try, vocabSize)
 
         # Send results
+        clearLines(1)
         print("Sending results")
         if send_weights:
             send_data(server_socket, [R, weights])
@@ -132,13 +135,15 @@ try:
             send_data(server_socket, R)
 
         # Receive normalized results
+        clearLines(1)
         print("Waiting for normalized results")
         A = receive_data(server_socket)
 
         # Update weights
+        clearLines(1)
         print("Updating weights")
         weights = updateW(weights, alpha, sigma, nTrials, seeds, A)
-        clearLines(5)
+        clearLines(1)
 
 finally:
     server_socket.close()
