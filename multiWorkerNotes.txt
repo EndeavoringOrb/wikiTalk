@@ -1,0 +1,24 @@
+# Connecting new client:
+1. new client connects to server
+2. server requests current weights from one of the current clients
+3. new client sends how many threads it has
+4. server sends current weights to new client
+5. server sends a test to the new client
+6. new client sends test results
+7. server assigns a nTrials for that client based on the test
+
+# Training:
+
+for each client:
+    send(done, weight_request, seeds, nTrials[clientID])
+
+each client does their trials
+
+for each client:
+    recv(R)
+    nTrialsFinished[clientID] = len(R)
+
+calculate A
+
+for each client:
+    send(A, nTrialsFinished)

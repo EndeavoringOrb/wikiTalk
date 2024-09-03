@@ -7,6 +7,7 @@ import os
 
 os.environ["LINE_PROFILE"] = "0"
 
+
 class Head(nn.Module):
     """one head of self-attention"""
 
@@ -25,30 +26,31 @@ class Head(nn.Module):
     def preCompute(self, tok_emb):
         self.kPreComputed = self.key(tok_emb)
         self.kPreComputed = self.activation(self.kPreComputed)
-        self.kPreComputed = self.kPreComputed.transpose(-2, -1) * self.kPreComputed.shape[-1] ** -0.5
+        self.kPreComputed = (
+            self.kPreComputed.transpose(-2, -1) * self.kPreComputed.shape[-1] ** -0.5
+        )
 
         self.vPreComputed = self.value(tok_emb)
         self.vPreComputed = self.activation(self.vPreComputed)
 
-    #@profile
+    @profile
     def forwardPreComputed(self, x, tokens):
         # x has size (batch, channels)
         # output of size (batch, head size)
-        k = self.kPreComputed[tokens]
+        k = self.kPreComputed[:, tokens]
 
         q = self.query(x)  # (B,channels,hs)
         q = self.activation(q)
 
         # compute attention scores ("affinities")
-        wei = (
-            q @ k
-        )  # (B, C, hs) @ (B, hs, 1) -> (B, C, 1)
+        wei = q @ k  # (B, C, hs) @ (B, hs, 1) -> (B, C, 1)
         wei = F.softmax(wei, dim=-2)  # (B, C, 1)
         # wei = self.dropout(wei)
 
-        # perform the weighted aggregation of the values
+        # get values
         v = self.vPreComputed[tokens]
 
+        # perform the weighted aggregation of the values
         out = wei @ v  # (B, C, 1) @ (B, 1, hs) -> (B, C, hs)
         out = self.activation(out)
 
@@ -56,7 +58,7 @@ class Head(nn.Module):
 
         return out
 
-    #@profile
+    @profile
     def forward(self, x, tok_emb):
         # x has size (batch, channels)
         # tok_emb has size (batch, channels)
@@ -74,10 +76,11 @@ class Head(nn.Module):
         wei = F.softmax(wei, dim=-2)  # (B, C, 1)
         # wei = self.dropout(wei)
 
-        # perform the weighted aggregation of the values
+        # get values
         v = self.value(tok_emb)  # (B,1,hs)
         v = self.activation(v)
 
+        # perform the weighted aggregation of the values
         out = wei @ v  # (B, C, 1) @ (B, 1, hs) -> (B, C, hs)
         out = self.activation(out)
 
@@ -91,10 +94,23 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(self, embdSize, nHead, headSize, device):
         super().__init__()
-        self.heads = nn.ModuleList([Head(embdSize, headSize, device) for _ in range(nHead)])
+        self.heads = nn.ModuleList(
+            [Head(embdSize, headSize, device) for _ in range(nHead)]
+        )
         self.proj = nn.Linear(embdSize * nHead, embdSize)
 
-    #@profile
+    def preCompute(self, tok_emb):
+        for head in self.heads:
+            head.preCompute(tok_emb)
+
+    @profile
+    def forwardPreComputed(self, x, idx):
+        x = x.unsqueeze(dim=-1)
+        out = torch.cat([h.forwardPreComputed(x, idx) for h in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
+
+    @profile
     def forward(self, x, tok_emb):
         x = x.unsqueeze(dim=-1)
         out = torch.cat([h(x, tok_emb) for h in self.heads], dim=-1)
@@ -113,7 +129,7 @@ class FeedFoward(nn.Module):
             nn.Linear(4 * embdSize, embdSize),
         )
 
-    #@profile
+    @profile
     def forward(self, x):
         return self.net(x)
 
@@ -130,18 +146,19 @@ class Block(nn.Module):
         self.ln1 = nn.LayerNorm(embdSize)
         self.ln2 = nn.LayerNorm(embdSize)
         self.ln3 = nn.LayerNorm(embdSize)
-    
+
     def preCompute(self, embeddingTable):
         self.ln2_embed = self.ln2(embeddingTable)
+        self.sa.preCompute(self.ln2_embed)
 
-    #@profile
+    @profile
     def forwardPreComputed(self, x):
         state, tokens = x
-        state = state + self.sa(self.ln1(state), self.ln2_embed[tokens])
+        state = state + self.sa.forwardPreComputed(self.ln1(state), tokens)
         state = state + self.ffwd(self.ln3(state))
-        return (state, tokens)
+        return state
 
-    #@profile
+    @profile
     def forward(self, x):
         state, tok_emb = x
         state = state + self.sa(self.ln1(state), self.ln2(tok_emb))
@@ -154,7 +171,7 @@ class RecurrentTransformer(nn.Module):
         super().__init__()
         self.vocabSize = vocabSize
         self.hiddenSize = embdSize
-        
+
         # each token directly reads off the logits for the next token from a lookup table, embeddings are not ternary
         data = torch.normal(0, 0.02, (vocabSize, embdSize))
         self.token_embedding_table = nn.Parameter(data)
@@ -194,10 +211,17 @@ class RecurrentTransformer(nn.Module):
 
         return state, logits
 
-    #@profile
+    @profile
     def nextState(self, state, idx):
         tok_emb = self.token_embedding_table[idx]  # (B,C)
         state, tok_emb = self.blocks((state, tok_emb))  # (B,C)
+        state = self.ln_f(state)  # (B,C), this is the new state
+        return state
+
+    @profile
+    def nextStatePreComputed(self, state, idx):
+        for block in self.blocks:
+            state = block.forwardPreComputed((state, idx))
         state = self.ln_f(state)  # (B,C), this is the new state
         return state
 
@@ -205,11 +229,10 @@ class RecurrentTransformer(nn.Module):
         return self.lm_head(state)
 
     def preCompute(self):
-        pass
-        #for block in self.blocks:
-        #    block.preCompute()
+        for block in self.blocks:
+            block.preCompute(self.token_embedding_table)
 
-    #@profile
+    @profile
     def train(self, state, tokens, criterion):
         loss = 0
         numSteps = len(tokens[0])
@@ -218,4 +241,15 @@ class RecurrentTransformer(nn.Module):
             pred = self.getPreds(state)
             loss += criterion(pred, nextToken)
             state = self.nextState(state, nextToken)
+        return state, loss
+
+    @profile
+    def trainPreComputed(self, state, tokens, criterion):
+        loss = 0
+        numSteps = len(tokens[0])
+        for i in range(numSteps):
+            nextToken = tokens[:, i]
+            pred = self.getPreds(state)
+            loss += criterion(pred, nextToken)
+            state = self.nextStatePreComputed(state, nextToken)
         return state, loss

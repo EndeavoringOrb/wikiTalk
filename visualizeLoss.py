@@ -9,7 +9,7 @@ tokens = []
 loss = []
 
 # Read the data from the file
-with open("models/tokenPredArticle2/current/loss.txt", "r") as file:
+with open("models/tokenPredArticle/current/loss.txt", "r") as file:
     csv_reader = csv.reader(file)
     next(csv_reader)  # Skip the header row
     for row in csv_reader:

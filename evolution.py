@@ -1,3 +1,5 @@
+# https://openai.com/index/evolution-strategies/
+
 import numpy as np
 
 solution = np.array([0.5, 0.1, -0.3])
@@ -8,7 +10,7 @@ def f(w):
 
 
 nIters = 300  # number of optimization iterations
-npop = 50  # population size
+npop = 500  # population size
 sigma = 0.1  # noise standard deviation
 alpha = 0.001  # learning rate
 w = np.random.randn(3)  # initial guess
@@ -20,8 +22,11 @@ for i in range(nIters):
         R[j] = f(w_try)
     A = (R - np.mean(R)) / np.std(R)
     w = w + alpha / (npop * sigma) * np.dot(N.T, A)
+    print(i, np.mean(R))
 
+###################
 # multi-worker code
+###################
 nWorkers = 5
 seed = 0
 
