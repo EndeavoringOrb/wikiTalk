@@ -138,9 +138,9 @@ def send_data(sock, data):
         sock.sendall(chunk)
 
 
-def send_nparrays(sock, data: np.ndarray):
+def send_nparrays(sock, data: list[np.ndarray]):
     # Encode data
-    data_bytes = [item.tobytes() for item in data]
+    data_bytes = [item.astype(np.float32).tobytes() for item in data]
     # Create the header with number of arrays (8 bytes)
     data_len = len(data_bytes)
     header = struct.pack("Q", data_len)
@@ -174,8 +174,12 @@ try:
     clearLines(1)
     print("Waiting for initial data")
     # Receive initial data
-    weights = receive_nparrays(server_socket)
-    seeds, nTrials, alpha, sigma, vocabSize, firstClient = receive_data(server_socket)
+    weights: list[np.ndarray] = receive_nparrays(server_socket)
+    seeds, nTrials, alpha, sigma, vocabSize, weightShapes, firstClient = receive_data(
+        server_socket
+    )
+    for i in range(len(weights)):
+        weights[i] = weights[i].reshape(weightShapes[i]).copy()
 
     if not firstClient:
         # Receive normalized results

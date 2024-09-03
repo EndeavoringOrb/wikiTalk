@@ -84,9 +84,9 @@ def send_data(sock, data):
         sock.sendall(chunk)
 
 
-def send_nparrays(sock, data: np.ndarray):
+def send_nparrays(sock, data: list[np.ndarray]):
     # Encode data
-    data_bytes = [item.tobytes() for item in data]
+    data_bytes = [item.astype(np.float32).tobytes() for item in data]
     # Create the header with number of arrays (8 bytes)
     data_len = len(data_bytes)
     header = struct.pack("Q", data_len)
@@ -120,11 +120,12 @@ tokenLoader = loadTokens("tokenData")
 fileNum, title, tokens = next(tokenLoader)
 vocabSize = len(vocab.vocab)
 
-model_initState = np.random.random((hiddenSize))
-model_ih = np.random.random((vocabSize, hiddenSize))
-model_hh = np.random.random((hiddenSize, hiddenSize))
-model_out = np.random.random((hiddenSize, vocabSize))
+model_initState = np.random.random((hiddenSize)).astype(np.float32)
+model_ih = np.random.random((vocabSize, hiddenSize)).astype(np.float32)
+model_hh = np.random.random((hiddenSize, hiddenSize)).astype(np.float32)
+model_out = np.random.random((hiddenSize, vocabSize)).astype(np.float32)
 weights = [model_initState, model_ih, model_hh, model_out]
+weightShapes = [item.shape for item in weights]
 
 # Server setup
 CHUNK_SIZE = 64
@@ -185,7 +186,10 @@ while True:
             # Set seeds again with new length
             seeds = np.random.randint(0, 1_000_000_000, len(sockets_list) - 1)
             send_nparrays(client_socket, weights)
-            send_data(client_socket, [seeds, nTrials, alpha, sigma, vocabSize, True])
+            send_data(
+                client_socket,
+                [seeds, nTrials, alpha, sigma, vocabSize, weightShapes, True],
+            )
         else:
             new_clients_list.append(client_socket)
 
@@ -241,7 +245,7 @@ while True:
                     send_nparrays(client_socket, weights)
                     send_data(
                         new_client,
-                        [seeds, nTrials, alpha, sigma, vocabSize, False],
+                        [seeds, nTrials, alpha, sigma, vocabSize, weightShapes, False],
                     )
                     clearLines(1)
 
