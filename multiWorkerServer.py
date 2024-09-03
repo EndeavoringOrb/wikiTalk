@@ -11,6 +11,28 @@ def clearLines(numLines):
         print("\033[F\033[K", end="")
 
 
+def receive_nparray(sock):
+    # Receive the header
+    header = sock.recv(8)
+    if not header:
+        raise ConnectionResetError()
+    message_length = struct.unpack("Q", header)[0]
+
+    # Receive the message
+    chunks = []
+    while message_length > 0:
+        chunkLen = min(CHUNK_SIZE, message_length)
+        chunk = sock.recv(chunkLen)
+        if not chunk:
+            raise ConnectionResetError()
+        chunks.append(chunk)
+        message_length -= chunkLen
+
+    data = np.frombuffer(b"".join(chunks), dtype=np.float32)
+
+    return data
+
+
 def receive_data(sock):
     # Receive the header
     header = sock.recv(8)
@@ -21,7 +43,7 @@ def receive_data(sock):
     # Receive the message
     chunks = []
     while message_length > 0:
-        chunkLen = min(1024, message_length)
+        chunkLen = min(CHUNK_SIZE, message_length)
         chunk = sock.recv(chunkLen)
         if not chunk:
             raise ConnectionResetError()
@@ -37,14 +59,34 @@ def send_data(sock, data):
     # Encode data
     data_bytes = pickle.dumps(data)
     # Create the header with message length (8 bytes)
-    header = struct.pack("Q", len(data_bytes))
+    data_len = len(data_bytes)
+    header = struct.pack("Q", data_len)
     # Send header
     sock.sendall(header)
 
     # Send chunks
     chunks = []
     while len(data_bytes) > 0:
-        chunkLen = min(1024, len(data_bytes))
+        chunkLen = min(CHUNK_SIZE, len(data_bytes))
+        chunks.append(data_bytes[:chunkLen])
+        data_bytes = data_bytes[chunkLen:]
+    for chunk in chunks:
+        sock.sendall(chunk)
+
+
+def send_nparray(sock, data: np.ndarray):
+    # Encode data
+    data_bytes = data.tobytes()
+    # Create the header with message length (8 bytes)
+    data_len = len(data_bytes)
+    header = struct.pack("Q", data_len)
+    # Send header
+    sock.sendall(header)
+
+    # Send chunks
+    chunks = []
+    while len(data_bytes) > 0:
+        chunkLen = min(CHUNK_SIZE, len(data_bytes))
         chunks.append(data_bytes[:chunkLen])
         data_bytes = data_bytes[chunkLen:]
     for chunk in chunks:
@@ -68,9 +110,10 @@ model_out = np.random.random((hiddenSize, vocabSize))
 weights = [model_initState, model_ih, model_hh, model_out]
 
 # Server setup
+CHUNK_SIZE = 64
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.bind(("0.0.0.0", 8080))
-server_socket.listen(5)
+server_socket.listen(10000)
 server_socket.settimeout(10)
 
 sockets_list = [server_socket]
@@ -124,14 +167,13 @@ while True:
         if numClients == 1:
             # Set seeds again with new length
             seeds = np.random.randint(0, 1_000_000_000, len(sockets_list) - 1)
-            send_data(
-                client_socket, [weights, seeds, nTrials, alpha, sigma, vocabSize, True]
-            )
+            send_nparray(client_socket, weights)
+            send_data(client_socket, [seeds, nTrials, alpha, sigma, vocabSize, True])
         else:
             new_clients_list.append(client_socket)
 
         updateLog()
-    
+
     # Get new tokens
     if len(sockets_list) > len(new_clients_list) + 1:
         try:
@@ -139,6 +181,7 @@ while True:
         except StopIteration:
             tokenLoader = loadTokens("tokenData")
             fileNum, title, tokens = next(tokenLoader)
+    tokens = tokens[:200]
 
     # Broadcast done, weight request, seeds and nTrials for each client
     for i, client_socket in enumerate(sockets_list):
@@ -168,19 +211,20 @@ while True:
         clearLines(1)
         print(f"Receiving data from {clients[client_socket]}")
         try:
-            data = receive_data(client_socket)
+            R = receive_data(client_socket)
 
             if i == receivingWeightsFrom:
                 # If recieving weights, handle getting the weights
-                R, weights = data
+                weights = receive_nparray(client_socket)
                 all_R.append(R)
 
                 # send weights to new clients
                 for new_client in new_clients_list:
                     print(f"Sending data to new client {new_client}")
+                    send_nparray(client_socket, weights)
                     send_data(
                         new_client,
-                        [weights, seeds, nTrials, alpha, sigma, vocabSize, False],
+                        [seeds, nTrials, alpha, sigma, vocabSize, False],
                     )
                     clearLines(1)
 
@@ -188,7 +232,7 @@ while True:
                 new_clients_list = []
                 receivingWeightsFrom = -1
             else:
-                all_R.append(data)
+                all_R.append(R)
         except Exception as e:
             log.append(f"EXCEPTION: {e}")
             log.append(f"Connection closed from {clients[client_socket]}")
@@ -217,7 +261,7 @@ while True:
 
         clearLines(1)
         print(f"Sending normalized rewards to {clients[client_socket]}")
-        send_data(client_socket, A)
+        send_nparray(client_socket, A)
 
     """
     for notified_socket in read_sockets:
