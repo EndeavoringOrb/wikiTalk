@@ -5,9 +5,11 @@ import pickle
 import numpy as np
 from tokenizeWiki import loadTokens, vocab
 
+
 def clearLines(numLines):
     for _ in range(numLines):
         print("\033[F\033[K", end="")
+
 
 def send_data(sock, data):
     # Encode data
@@ -44,28 +46,48 @@ numClients = 0
 new_clients_list = []
 receivingWeightsFrom = -1
 
+# Trackers setup
+mean = "N/A"
+updated = True
+log = []
+
 print("Server started and listening")
-print()
+print("\nLOG:")
+print("\n" * 3)
 
 while True:
     # Handle any new connections
-    print("Checking for new connections")
-    read_sockets, _, exception_sockets = select.select(sockets_list, [], sockets_list, 0.1)
+    if updated:
+        clearLines(4)
+        for line in log:
+            print(line)
+        log = []
+        print()
+        print(f"Mean: {mean}")
+        print(f"# Clients: {numClients}")
+        print("Checking for new connections")
+        updated = False
+    read_sockets, _, exception_sockets = select.select(
+        sockets_list, [], sockets_list, 0.1
+    )
 
     # Set seeds
     seeds = np.random.randint(0, 1_000_000_000, len(sockets_list) - 1)
 
     if server_socket in read_sockets:
         client_socket, client_address = server_socket.accept()
-        print(f"New connection from {client_address}")
+        log.append(f"New connection from {client_address}")
         sockets_list.append(client_socket)
         clients[client_socket] = client_address
         numClients += 1
+        updated = True
 
         if numClients == 1:
             # Set seeds again with new length
             seeds = np.random.randint(0, 1_000_000_000, len(sockets_list) - 1)
-            send_data(client_socket, [weights, seeds, nTrials, alpha, sigma, vocabSize, True])
+            send_data(
+                client_socket, [weights, seeds, nTrials, alpha, sigma, vocabSize, True]
+            )
         else:
             new_clients_list.append(client_socket)
 
@@ -113,7 +135,8 @@ while True:
                 for new_client in new_clients_list:
                     print(f"Sending data to new client {new_client}")
                     send_data(
-                        new_client, [weights, seeds, nTrials, alpha, sigma, vocabSize, False]
+                        new_client,
+                        [weights, seeds, nTrials, alpha, sigma, vocabSize, False],
                     )
                     clearLines(1)
 
@@ -125,15 +148,14 @@ while True:
             clearLines(1)
         except Exception as e:
             clearLines(1)
-            print(e)
-            print(f"Connection closed from {clients[client_socket]}")
+            log.append(f"EXCEPTION: {e}")
+            log.append(f"Connection closed from {clients[client_socket]}")
             sockets_list.remove(client_socket)
             del clients[client_socket]
             client_socket.close()
             numClients -= 1
 
     # Normalize rewards
-    clearLines(1)
     if len(all_R) == 0:
         A = np.array([])
     else:
@@ -143,14 +165,14 @@ while True:
         std = np.std(R)
         A = (R - mean) / std
         clearLines(1)
-        print(f"Mean Reward: {mean}")
+        updated = True
 
     # Send A to each client to update their weights
     for client_socket in sockets_list:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
-        print(f"Sending result to {clients[client_socket]}")
+        print(f"Sending normalized rewards to {clients[client_socket]}")
         send_data(client_socket, A)
         clearLines(1)
 

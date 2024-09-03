@@ -5,6 +5,11 @@ import numpy as np
 from tqdm import trange
 
 
+def clearLines(numLines):
+    for _ in range(numLines):
+        print("\033[F\033[K", end="")
+
+
 def tanh(x):
     ex = np.exp(x)
     e_x = np.exp(-x)
@@ -92,7 +97,9 @@ server_socket.connect(("130.215.211.30", 8080))
 try:
     print("Waiting for initial data")
     # Receive initial data
-    weights, seeds, nTrials, alpha, sigma, vocabSize, firstClient = receive_data(server_socket)
+    weights, seeds, nTrials, alpha, sigma, vocabSize, firstClient = receive_data(
+        server_socket
+    )
 
     if not firstClient:
         # Receive normalized results
@@ -131,7 +138,7 @@ try:
         # Update weights
         print("Updating weights")
         weights = updateW(weights, alpha, sigma, nTrials, seeds, A)
-        print()
+        clearLines(5)
 
 finally:
     server_socket.close()
