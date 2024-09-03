@@ -47,7 +47,7 @@ def receive_nparrays(sock):
 
         return data
     except Exception as e:
-        log.append(f"EXCEPTION: {e}")
+        log.append(f"EXCEPTION in receive_nparrays: {e}")
         log.append(f"Connection closed from {clients[sock]}")
         sockets_list.remove(sock)
         del clients[sock]
@@ -82,7 +82,7 @@ def receive_data(sock):
 
         return data
     except Exception as e:
-        log.append(f"EXCEPTION: {e}")
+        log.append(f"EXCEPTION in receive_data: {e}")
         log.append(f"Connection closed from {clients[sock]}")
         sockets_list.remove(sock)
         del clients[sock]
@@ -114,7 +114,7 @@ def send_data(sock, data):
         for chunk in chunks:
             sock.sendall(chunk)
     except Exception as e:
-        log.append(f"EXCEPTION: {e}")
+        log.append(f"EXCEPTION in send_data: {e}")
         log.append(f"Connection closed from {clients[sock]}")
         sockets_list.remove(sock)
         del clients[sock]
@@ -153,7 +153,7 @@ def send_nparrays(sock, data: list[np.ndarray]):
             for chunk in chunks:
                 sock.sendall(chunk)
     except Exception as e:
-        log.append(f"EXCEPTION: {e}")
+        log.append(f"EXCEPTION in send_nparrays: {e}")
         log.append(f"Connection closed from {clients[sock]}")
         sockets_list.remove(sock)
         del clients[sock]
@@ -327,8 +327,18 @@ while True:
     # Normalize rewards
     all_R = list([item[2] for item in workerInfo.values()])
 
-    if len(all_R) == 0:
+    success = (len(all_R) != 0)
+    if not success:
         A = np.array([])
+        # Send A to each client to update their weights
+        for client_socket in sockets_list:
+            if client_socket == server_socket or client_socket in new_clients_list:
+                continue
+
+            log.append(f"Sending normalization failure to {clients[client_socket]}")
+            updateLog()
+
+            send_data(client_socket, (success, []))
     else:
         log.append(f"Calculating normalized rewards")
         updateLog()
@@ -337,21 +347,22 @@ while True:
         std = np.std(R)
         A = (R - mean) / std
 
-    info = []
-    for k, v in workerInfo.items():
-        info.append((v[0], v[1], len(v[2])))
-    info = sorted(info, key=lambda x: x[0])
+        info = []
+        for k, v in workerInfo.items():
+            info.append((v[0], v[1], len(v[2])))
+        info = sorted(info, key=lambda x: x[0])
 
-    # Send A to each client to update their weights
-    for client_socket in sockets_list:
-        if client_socket == server_socket or client_socket in new_clients_list:
-            continue
+        # Send A to each client to update their weights
+        for client_socket in sockets_list:
+            if client_socket == server_socket or client_socket in new_clients_list:
+                continue
 
-        log.append(f"Sending normalized rewards to {clients[client_socket]}")
-        updateLog()
+            log.append(f"Sending normalized rewards to {clients[client_socket]}")
+            updateLog()
 
-        send_nparrays(client_socket, [A])
-        send_data(client_socket, info)
+            send_data(client_socket, (success, info))
+            send_nparrays(client_socket, [A])
+        
 
     """
     for notified_socket in read_sockets:

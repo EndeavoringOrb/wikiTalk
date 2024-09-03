@@ -225,8 +225,10 @@ try:
         # Receive normalized results
         clearLines(1)
         print("Waiting for normalized results")
+        success, workerInfo = receive_data(server_socket)
+        if not success:
+            continue
         A = receive_nparrays(server_socket)[0]
-        workerInfo = receive_data(server_socket)
 
         # Update weights
         clearLines(1)
