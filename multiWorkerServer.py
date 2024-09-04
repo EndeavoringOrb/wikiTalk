@@ -116,6 +116,7 @@ def send_data(sock, data):
             data_bytes = data_bytes[chunkLen:]
         for chunk in chunks:
             sock.sendall(chunk)
+        return True
     except Exception as e:
         log.append(f"EXCEPTION in send_data: {e}")
         log.append(f"Connection closed from {clients[sock]}")
@@ -124,6 +125,7 @@ def send_data(sock, data):
         sock.close()
         numClients -= 1
         updateLog()
+        return False
 
 
 def send_nparrays(sock, data: list[np.ndarray]):
@@ -155,6 +157,7 @@ def send_nparrays(sock, data: list[np.ndarray]):
                 item_bytes = item_bytes[chunkLen:]
             for chunk in chunks:
                 sock.sendall(chunk)
+        return True
     except Exception as e:
         log.append(f"EXCEPTION in send_nparrays: {e}")
         log.append(f"Connection closed from {clients[sock]}")
@@ -163,6 +166,7 @@ def send_nparrays(sock, data: list[np.ndarray]):
         sock.close()
         numClients -= 1
         updateLog()
+        return False
 
 
 def saveWeights(folder, weights):
@@ -179,19 +183,31 @@ def saveWeights(folder, weights):
 
     # Write to file
     with open(f"{folderpath}/{date_time_str}.bin", "wb") as f:
-        pickle.dump(weights, f)
+        pickle.dump([weights, weightShapes], f)
+
+
+def loadWeights(file):
+    # Load from file
+    with open(file, "rb") as f:
+        weights, weightShapes = pickle.load(f)
+
+    weights = [weights[i].reshape(weightShapes[i]) for i in range(len(weights))]
+
+    return weights
 
 
 # Training setup
 nTrials = 100
 alpha = 2e-4
-sigma = 0.01
-hiddenSize = 16
+sigmaMax = 2e-3
+sigmaMin = 2e-3
+hiddenSize = 64
 checkPointSeconds = 1 * 60
 savePath = "multiWorkerModels/0"
 
 tokenLoader = loadTokens("tokenData")
 fileNum, title, tokens = next(tokenLoader)
+tokens = np.asarray(tokens[:100], dtype=np.uint8)
 vocabSize = len(vocab.vocab)
 
 model_initState = np.random.random((hiddenSize)).astype(np.float32)
@@ -199,10 +215,11 @@ model_ih = np.random.random((vocabSize, hiddenSize)).astype(np.float32)
 model_hh = np.random.random((hiddenSize, hiddenSize)).astype(np.float32)
 model_out = np.random.random((hiddenSize, vocabSize)).astype(np.float32)
 weights = [model_initState, model_ih, model_hh, model_out]
+#weights = loadWeights("multiWorkerModels/0/checkpoints/2024-09-03_22-00-48.bin")
 weightShapes = [item.shape for item in weights]
 
 # Server setup
-CHUNK_SIZE = 64
+CHUNK_SIZE = 256
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.bind(("0.0.0.0", 8080))
 server_socket.listen(10000)
@@ -223,8 +240,7 @@ totalSamples = 0
 
 
 print("Server started and listening")
-print("\nLOG:")
-print("\n" * 3)
+print("\n" * 5)
 
 
 def updateLog():
@@ -249,6 +265,9 @@ while True:
         sockets_list, [], sockets_list, 0.1
     )
 
+    # Update sigma
+    sigma = (0.5 * np.sin(0.1 * totalIters) + 0.5) * (sigmaMax - sigmaMin) + sigmaMin
+
     if server_socket in read_sockets:
         client_socket, client_address = server_socket.accept()
         log.append(f"New connection from {client_address}")
@@ -269,13 +288,13 @@ while True:
         updateLog()
 
     # Get new tokens
-    if len(sockets_list) > len(new_clients_list) + 1:
+    """if len(sockets_list) > len(new_clients_list) + 1:
         try:
             fileNum, title, tokens = next(tokenLoader)
         except StopIteration:
             tokenLoader = loadTokens("tokenData")
             fileNum, title, tokens = next(tokenLoader)
-    tokens = tokens[:200]
+    tokens = np.asarray(tokens[:200], dtype=np.uint8)"""
 
     # Check if we want to get a checkpoint
     requestCheckpoint = (perf_counter() - lastCheckpointTime) > checkPointSeconds
@@ -299,16 +318,27 @@ while True:
         )
 
         workerID = len(workerInfo)
-        workerInfo[client_socket] = (workerID, seeds[workerID])
 
         if need_weights:
             receivingWeightsFrom = workerID
 
-        send_data(
+        success = send_data(
             client_socket,
-            [False, need_weights, seeds, nTrials, workerID, tokens, alpha, sigma],
+            [
+                False,
+                need_weights,
+                seeds[workerID],
+                nTrials,
+                workerID,
+                tokens,
+                alpha,
+                sigma,
+            ],
         )
-        workerID += 1
+
+        if success:
+            workerInfo[client_socket] = (workerID, seeds[workerID])
+            workerID += 1
 
     # Receive the rewards from each client
     for client_socket in sockets_list:
@@ -341,8 +371,8 @@ while True:
 
             # send weights to new clients
             for new_client in new_clients_list:
-                send_nparrays(new_client, weights)
-                send_data(
+                success = send_nparrays(new_client, weights)
+                success = send_data(
                     new_client,
                     [alpha, sigma, vocabSize, weightShapes, False],
                 )
@@ -368,6 +398,9 @@ while True:
         mean = np.mean(R)
         std = np.std(R)
         A = (R - mean) / std
+
+        with open(f"{savePath}/loss.txt", "a", encoding="utf-8") as f:
+            f.write(f"{mean} {sigma}\n")
 
         info = []
         for k, v in workerInfo.items():

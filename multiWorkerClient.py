@@ -166,20 +166,22 @@ def send_nparrays(sock, data: list[np.ndarray]):
 
 
 print("Connecting to server")
-CHUNK_SIZE = 64
+CHUNK_SIZE = 256
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.connect(("130.215.211.30", 8080))
-server_socket.settimeout(10)
+clearLines(1)
+print("Connected to server")
+
+iterNum = 0
 
 try:
     print("Waiting for initial data")
     # Receive initial data
     weights: list[np.ndarray] = receive_nparrays(server_socket)
-    alpha, sigma, vocabSize, weightShapes, firstClient = receive_data(
-        server_socket
-    )
+    alpha, sigma, vocabSize, weightShapes, firstClient = receive_data(server_socket)
     for i in range(len(weights)):
         weights[i] = weights[i].reshape(weightShapes[i]).copy()
+    clearLines(1)
 
     if not firstClient:
         # Receive normalized results
@@ -191,17 +193,20 @@ try:
             # Update weights
             print("Updating weights")
             weights = updateW(weights, alpha, sigma, A, workerInfo)
+            clearLines(1)
+        clearLines(1)
 
     while True:
+        print(f"Iter #: {iterNum}")
         print("Waiting for data")
         # Get data
-        done, send_weights, seeds, nTrials, client_id, tokens, alpha, sigma = (
+        done, send_weights, seed, nTrials, client_id, tokens, alpha, sigma = (
             receive_data(server_socket)
         )
 
         # Do trials
         ## Initialize
-        np.random.seed(seeds[client_id])  # Set seed
+        np.random.seed(seed)  # Set seed
         R = np.zeros(nTrials)  # Init reward array
 
         for trial in trange(nTrials, desc="Doing trials"):
@@ -227,6 +232,9 @@ try:
         # Update weights
         print("Updating weights")
         weights = updateW(weights, alpha, sigma, A, workerInfo)
+
+        iterNum += 1
+        clearLines(6 + send_weights)
 
 finally:
     server_socket.close()
