@@ -74,6 +74,7 @@ def receive_nparrays(sock):
     global numClients
     try:
         # Receive the header
+        sleep(0.01)
         header = sock.recv(8)
         if not header:
             raise ConnectionResetError()
@@ -83,6 +84,7 @@ def receive_nparrays(sock):
 
         for i in range(num_items):
             # Receive the header
+            sleep(0.01)
             header = sock.recv(8)
             if not header:
                 raise ConnectionResetError()
@@ -92,6 +94,7 @@ def receive_nparrays(sock):
             chunks = []
             while item_len > 0:
                 chunkLen = min(CHUNK_SIZE, item_len)
+                sleep(0.01)
                 chunk = sock.recv(chunkLen)
                 if not chunk:
                     raise ConnectionResetError()
@@ -119,6 +122,7 @@ def receive_data(sock):
     global numClients
     try:
         # Receive the header
+        sleep(0.01)
         header = sock.recv(8)
         if not header:
             raise ConnectionResetError()
@@ -128,6 +132,7 @@ def receive_data(sock):
         chunks = []
         while message_length > 0:
             chunkLen = min(CHUNK_SIZE, message_length)
+            sleep(0.01)
             chunk = sock.recv(chunkLen)
             if not chunk:
                 raise ConnectionResetError()

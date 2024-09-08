@@ -21,6 +21,7 @@ def receive_nparrays(sock):
     global numClients
     try:
         # Receive the header
+        sleep(0.01)
         header = sock.recv(8)
         if not header:
             raise ConnectionResetError()
@@ -30,6 +31,7 @@ def receive_nparrays(sock):
 
         for i in range(num_items):
             # Receive the header
+            sleep(0.01)
             header = sock.recv(8)
             if not header:
                 raise ConnectionResetError()
@@ -39,6 +41,7 @@ def receive_nparrays(sock):
             chunks = []
             while item_len > 0:
                 chunkLen = min(CHUNK_SIZE, item_len)
+                sleep(0.01)
                 chunk = sock.recv(chunkLen)
                 if not chunk:
                     raise ConnectionResetError()
@@ -66,6 +69,7 @@ def receive_data(sock):
     global numClients
     try:
         # Receive the header
+        sleep(0.01)
         header = sock.recv(8)
         if not header:
             raise ConnectionResetError()
@@ -75,6 +79,7 @@ def receive_data(sock):
         chunks = []
         while message_length > 0:
             chunkLen = min(CHUNK_SIZE, message_length)
+            sleep(0.01)
             chunk = sock.recv(chunkLen)
             if not chunk:
                 raise ConnectionResetError()
@@ -286,6 +291,7 @@ while True:
                 client_socket,
                 [alpha, sigma, vocabSize, weightShapes, True],
             )
+            log.append(f"Sent weights and data to new client {client_address}")
         else:
             log.append(f"Added {client_address} to new clients")
             new_clients_list.append(client_socket)
@@ -369,6 +375,7 @@ while True:
                 if client_socket in workerInfo:
                     del workerInfo[client_socket]
                 continue
+            log.append(f"Received weights from {clients[client_socket]}")
 
             if requestCheckpoint:
                 lastCheckpointTime = perf_counter()
