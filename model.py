@@ -62,19 +62,16 @@ class Head(nn.Module):
     def forward(self, x, tok_emb):
         # x has size (batch, channels)
         # tok_emb has size (batch, channels)
-        # output of size (batch, head size)
+        # output of size (batch, channels)
         k = self.key(tok_emb)  # (B,1,hs)
-        k = self.activation(k)
 
         q = self.query(x)  # (B,channels,hs)
-        q = self.activation(q)
 
         # compute attention scores ("affinities")
         wei = (
             q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5
         )  # (B, C, hs) @ (B, hs, 1) -> (B, C, 1)
         wei = F.softmax(wei, dim=-2)  # (B, C, 1)
-        # wei = self.dropout(wei)
 
         # get values
         v = self.value(tok_emb)  # (B,1,hs)

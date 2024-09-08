@@ -2,6 +2,7 @@ import socket
 import struct
 import pickle
 import numpy as np
+from time import sleep
 from tqdm import trange
 
 
@@ -67,103 +68,170 @@ def updateW(w, alpha, sigma, A, workerInfo):
 
 
 def receive_nparrays(sock):
-    # Receive the header
-    header = sock.recv(8)
-    if not header:
-        raise ConnectionResetError()
-    num_items = struct.unpack("Q", header)[0]
-
-    data = []
-
-    for i in range(num_items):
+    global log
+    global sockets_list
+    global clients
+    global numClients
+    try:
         # Receive the header
         header = sock.recv(8)
         if not header:
             raise ConnectionResetError()
-        item_len = struct.unpack("Q", header)[0]
+        num_items = struct.unpack("Q", header)[0]
+
+        data = []
+
+        for i in range(num_items):
+            # Receive the header
+            header = sock.recv(8)
+            if not header:
+                raise ConnectionResetError()
+            item_len = struct.unpack("Q", header)[0]
+
+            # Receive the message
+            chunks = []
+            while item_len > 0:
+                chunkLen = min(CHUNK_SIZE, item_len)
+                chunk = sock.recv(chunkLen)
+                if not chunk:
+                    raise ConnectionResetError()
+                chunks.append(chunk)
+                item_len -= chunkLen
+
+            item = np.frombuffer(b"".join(chunks), dtype=np.float32)
+            data.append(item)
+
+        return data
+    except Exception as e:
+        log.append(f"EXCEPTION in receive_nparrays: {e}")
+        log.append(f"Connection closed from {clients[sock]}")
+        sockets_list.remove(sock)
+        del clients[sock]
+        sock.close()
+        numClients -= 1
+        updateLog()
+
+
+def receive_data(sock):
+    global log
+    global sockets_list
+    global clients
+    global numClients
+    try:
+        # Receive the header
+        header = sock.recv(8)
+        if not header:
+            raise ConnectionResetError()
+        message_length = struct.unpack("Q", header)[0]
 
         # Receive the message
         chunks = []
-        while item_len > 0:
-            chunkLen = min(CHUNK_SIZE, item_len)
+        while message_length > 0:
+            chunkLen = min(CHUNK_SIZE, message_length)
             chunk = sock.recv(chunkLen)
             if not chunk:
                 raise ConnectionResetError()
             chunks.append(chunk)
-            item_len -= chunkLen
+            message_length -= chunkLen
 
-        item = np.frombuffer(b"".join(chunks), dtype=np.float32)
-        data.append(item)
+        data = pickle.loads(b"".join(chunks))
 
-    return data
-
-
-def receive_data(sock):
-    # Receive the header
-    header = sock.recv(8)
-    if not header:
-        raise ConnectionResetError()
-    message_length = struct.unpack("Q", header)[0]
-
-    # Receive the message
-    chunks = []
-    while message_length > 0:
-        chunkLen = min(CHUNK_SIZE, message_length)
-        chunk = sock.recv(chunkLen)
-        if not chunk:
-            raise ConnectionResetError()
-        chunks.append(chunk)
-        message_length -= chunkLen
-
-    data = pickle.loads(b"".join(chunks))
-
-    return data
+        return data
+    except Exception as e:
+        log.append(f"EXCEPTION in receive_data: {e}")
+        log.append(f"Connection closed from {clients[sock]}")
+        sockets_list.remove(sock)
+        del clients[sock]
+        sock.close()
+        numClients -= 1
+        updateLog()
 
 
 def send_data(sock, data):
-    # Encode data
-    data_bytes = pickle.dumps(data)
-    # Create the header with message length (8 bytes)
-    data_len = len(data_bytes)
-    header = struct.pack("Q", data_len)
-    # Send header
-    sock.sendall(header)
-
-    # Send chunks
-    chunks = []
-    while len(data_bytes) > 0:
-        chunkLen = min(CHUNK_SIZE, len(data_bytes))
-        chunks.append(data_bytes[:chunkLen])
-        data_bytes = data_bytes[chunkLen:]
-    for chunk in chunks:
-        sock.sendall(chunk)
-
-
-def send_nparrays(sock, data: list[np.ndarray]):
-    # Encode data
-    data_bytes = [item.astype(np.float32).tobytes() for item in data]
-    # Create the header with number of arrays (8 bytes)
-    data_len = len(data_bytes)
-    header = struct.pack("Q", data_len)
-    # Send header
-    sock.sendall(header)
-
-    for item_bytes in data_bytes:
-        # Create the header with number of arrays (8 bytes)
-        item_len = len(item_bytes)
-        header = struct.pack("Q", item_len)
+    global log
+    global sockets_list
+    global clients
+    global numClients
+    try:
+        # Encode data
+        data_bytes = pickle.dumps(data)
+        # Create the header with message length (8 bytes)
+        data_len = len(data_bytes)
+        header = struct.pack("Q", data_len)
         # Send header
         sock.sendall(header)
+        sleep(0.01)
 
         # Send chunks
         chunks = []
-        while len(item_bytes) > 0:
-            chunkLen = min(CHUNK_SIZE, len(item_bytes))
-            chunks.append(item_bytes[:chunkLen])
-            item_bytes = item_bytes[chunkLen:]
+        while len(data_bytes) > 0:
+            chunkLen = min(CHUNK_SIZE, len(data_bytes))
+            chunks.append(data_bytes[:chunkLen])
+            data_bytes = data_bytes[chunkLen:]
         for chunk in chunks:
             sock.sendall(chunk)
+            sleep(0.01)
+        return True
+    except Exception as e:
+        log.append(f"EXCEPTION in send_data: {e}")
+        log.append(f"Connection closed from {clients[sock]}")
+        sockets_list.remove(sock)
+        del clients[sock]
+        sock.close()
+        numClients -= 1
+        updateLog()
+        return False
 
+
+def send_nparrays(sock, data: list[np.ndarray]):
+    global log
+    global sockets_list
+    global clients
+    global numClients
+    try:
+        # Encode data
+        data_bytes = [item.astype(np.float32).tobytes() for item in data]
+        # Create the header with number of arrays (8 bytes)
+        data_len = len(data_bytes)
+        header = struct.pack("Q", data_len)
+        # Send header
+        sock.sendall(header)
+        sleep(0.01)
+
+        for item_bytes in data_bytes:
+            # Create the header with number of arrays (8 bytes)
+            item_len = len(item_bytes)
+            header = struct.pack("Q", item_len)
+            # Send header
+            sock.sendall(header)
+            sleep(0.01)
+
+            # Send chunks
+            chunks = []
+            while len(item_bytes) > 0:
+                chunkLen = min(CHUNK_SIZE, len(item_bytes))
+                chunks.append(item_bytes[:chunkLen])
+                item_bytes = item_bytes[chunkLen:]
+            for chunk in chunks:
+                sock.sendall(chunk)
+                sleep(0.01)
+        return True
+    except Exception as e:
+        log.append(f"EXCEPTION in send_nparrays: {e}")
+        log.append(f"Connection closed from {clients[sock]}")
+        sockets_list.remove(sock)
+        del clients[sock]
+        sock.close()
+        numClients -= 1
+        updateLog()
+        return False
+
+numClients = 0
+log = []
+sockets_list = []
+clients = {}
+def updateLog():
+    pass
 
 print("Connecting to server")
 CHUNK_SIZE = 256

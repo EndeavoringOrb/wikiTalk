@@ -4,7 +4,7 @@ import select
 import struct
 import pickle
 import numpy as np
-from time import perf_counter
+from time import perf_counter, sleep
 from datetime import datetime
 from tokenizeWiki import loadTokens, vocab
 
@@ -107,6 +107,7 @@ def send_data(sock, data):
         header = struct.pack("Q", data_len)
         # Send header
         sock.sendall(header)
+        sleep(0.01)
 
         # Send chunks
         chunks = []
@@ -116,6 +117,7 @@ def send_data(sock, data):
             data_bytes = data_bytes[chunkLen:]
         for chunk in chunks:
             sock.sendall(chunk)
+            sleep(0.01)
         return True
     except Exception as e:
         log.append(f"EXCEPTION in send_data: {e}")
@@ -141,6 +143,7 @@ def send_nparrays(sock, data: list[np.ndarray]):
         header = struct.pack("Q", data_len)
         # Send header
         sock.sendall(header)
+        sleep(0.01)
 
         for item_bytes in data_bytes:
             # Create the header with number of arrays (8 bytes)
@@ -148,6 +151,7 @@ def send_nparrays(sock, data: list[np.ndarray]):
             header = struct.pack("Q", item_len)
             # Send header
             sock.sendall(header)
+            sleep(0.01)
 
             # Send chunks
             chunks = []
@@ -157,6 +161,7 @@ def send_nparrays(sock, data: list[np.ndarray]):
                 item_bytes = item_bytes[chunkLen:]
             for chunk in chunks:
                 sock.sendall(chunk)
+                sleep(0.01)
         return True
     except Exception as e:
         log.append(f"EXCEPTION in send_nparrays: {e}")
@@ -203,23 +208,23 @@ sigmaMax = 2e-3
 sigmaMin = 2e-3
 hiddenSize = 64
 checkPointSeconds = 1 * 60
-savePath = "multiWorkerModels/0"
+savePath = "multiWorkerModels/1"
 
 tokenLoader = loadTokens("tokenData")
 fileNum, title, tokens = next(tokenLoader)
 tokens = np.asarray(tokens[:100], dtype=np.uint8)
 vocabSize = len(vocab.vocab)
 
-model_initState = np.random.random((hiddenSize)).astype(np.float32)
-model_ih = np.random.random((vocabSize, hiddenSize)).astype(np.float32)
-model_hh = np.random.random((hiddenSize, hiddenSize)).astype(np.float32)
-model_out = np.random.random((hiddenSize, vocabSize)).astype(np.float32)
+model_initState = np.random.randn(hiddenSize).astype(np.float32) * 0.02
+model_ih = np.random.randn(vocabSize, hiddenSize).astype(np.float32) * 0.02
+model_hh = np.random.randn(hiddenSize, hiddenSize).astype(np.float32) * 0.02
+model_out = np.random.randn(hiddenSize, vocabSize).astype(np.float32) * 0.02
 weights = [model_initState, model_ih, model_hh, model_out]
-#weights = loadWeights("multiWorkerModels/0/checkpoints/2024-09-03_22-00-48.bin")
+# weights = loadWeights("multiWorkerModels/0/checkpoints/2024-09-03_22-00-48.bin")
 weightShapes = [item.shape for item in weights]
 
 # Server setup
-CHUNK_SIZE = 256
+CHUNK_SIZE = 1024
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.bind(("0.0.0.0", 8080))
 server_socket.listen(10000)
@@ -274,7 +279,6 @@ while True:
         sockets_list.append(client_socket)
         clients[client_socket] = client_address
         numClients += 1
-        updateLog()
 
         if numClients == 1:
             send_nparrays(client_socket, weights)
@@ -283,6 +287,7 @@ while True:
                 [alpha, sigma, vocabSize, weightShapes, True],
             )
         else:
+            log.append(f"Added {client_address} to new clients")
             new_clients_list.append(client_socket)
 
         updateLog()
@@ -371,11 +376,21 @@ while True:
 
             # send weights to new clients
             for new_client in new_clients_list:
+                client_address = clients[new_client]
                 success = send_nparrays(new_client, weights)
+                if success:
+                    log.append(f"Successfully sent weights to new client {client_address}")
+                else:
+                    log.append(f"Failed to send weights to new client {client_address}")
                 success = send_data(
                     new_client,
                     [alpha, sigma, vocabSize, weightShapes, False],
                 )
+                if success:
+                    log.append(f"Successfully sent new client data to new client {client_address}")
+                else:
+                    log.append(f"Failed to send new client data to new client {client_address}")
+                updateLog()
 
     # reset
     new_clients_list = []
@@ -399,6 +414,9 @@ while True:
         std = np.std(R)
         A = (R - mean) / std
 
+        if not os.path.exists(savePath):
+            os.makedirs(savePath)
+
         with open(f"{savePath}/loss.txt", "a", encoding="utf-8") as f:
             f.write(f"{mean} {sigma}\n")
 
@@ -412,8 +430,17 @@ while True:
             if client_socket == server_socket or client_socket in new_clients_list:
                 continue
 
-            send_data(client_socket, (success, info))
-            send_nparrays(client_socket, [A])
+            client_address = clients[client_socket]
+            success = send_data(client_socket, (success, info))
+            if success:
+                log.append(f"Successfully sent worker info to client {client_address}")
+            else:
+                log.append(f"Failed to send worker info to client {client_address}")
+            success = send_nparrays(client_socket, [A])
+            if success:
+                log.append(f"Successfully sent A to client {client_address}")
+            else:
+                log.append(f"Failed to send A to client {client_address}")
 
         # Increment counter
         totalIters += 1
