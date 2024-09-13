@@ -3,6 +3,7 @@ import vocab
 from helperFuncs import *
 from tqdm import trange
 
+
 def write_compact_data(data, filename):
     with open(filename, "wb") as f:
         # Write the number of tuples
@@ -31,6 +32,42 @@ def read_compact_data(filename):
             inner_list2 = list(f.read(len2))
 
             yield inner_list1, inner_list2
+
+
+def write_compact_titles(titles, filename):
+    with open(filename, "wb") as f:
+        # Write the number of title sets
+        f.write(struct.pack("I", len(titles)))
+
+        for titleSet in titles:
+            # Write the number of titles in the set
+            f.write(struct.pack("I", len(titleSet)))
+
+            for title in titleSet:
+                # Write the length of each title (using 4 bytes for each length)
+                f.write(struct.pack("I", len(title)))
+
+                # Write the data for each inner list
+                f.write(bytes(title))
+
+
+def read_compact_titles(filename):
+    with open(filename, "rb") as f:
+        # Read the number of title sets
+        numTitleSets = struct.unpack("I", f.read(4))[0]
+
+        for fileNum in range(numTitleSets):
+            # Read the number of titles
+            numTitles = struct.unpack("I", f.read(4))[0]
+
+            for pageIndex in range(numTitles):
+                # Read the number of titles
+                titleLen = struct.unpack("I", f.read(4))[0]
+
+                # Read the data for each inner list
+                title = list(f.read(titleLen))
+
+                yield fileNum, pageIndex, title
 
 
 def read_compact_data_indices(filename, indices=None):
@@ -138,30 +175,19 @@ def loadTitles(folder):
             yield fileIndex, pageIndex, titleTokens
 
 
-def getPage(titleTokens, folder):
-    # First, find the file and page index
-    fileIndex, pageIndex = findFileAndPageIndex(titleTokens, folder)
-
-    if fileIndex is None or pageIndex is None:
-        return None  # Page not found
-
+def loadPage(folder, fileIndex, pageIndex):
     # Construct the filename
-    filename = f"{folder}/{fileIndex}.bin"
+    filename = f"{folder}/articles/{fileIndex}.bin"
 
     # Use read_compact_data_indices to get the page
     for inner_list1, inner_list2 in read_compact_data_indices(filename, [pageIndex]):
         return inner_list1, inner_list2
 
-    return None  # This should not happen if the index was correct
+    return None, None  # This should not happen if the index was correct
 
-
-def findFileAndPageIndex(titleTokens, folder):
-    files = sorted(os.listdir(folder), key=lambda x: int(x.split(".")[0]))
-
-    for fileIndex, file in enumerate(files):
-        filename = f"{folder}/{file}"
-        for pageIndex, pageTitleTokens in read_compact_data_titles(filename):
-            if pageTitleTokens == titleTokens:
+def findFileAndPageIndex(titleTokens, filename):
+    for fileIndex, pageIndex, pageTitleTokens in read_compact_titles(filename):
+        if pageTitleTokens == titleTokens:
                 return fileIndex, pageIndex
 
     return None, None  # Page not found
@@ -229,6 +255,7 @@ charToToken = {
 }
 
 tokenToChar = {idx: character for character, idx in charToToken.items()}
+
 
 def main():
     wikiFolder = "wikiData"

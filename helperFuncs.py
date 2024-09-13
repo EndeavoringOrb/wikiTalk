@@ -73,7 +73,7 @@ def wikiLoader(folder, vocab, replace):
 
             # Iterate through pages
             for i, page in enumerate(dump):
-                if page.namespace == 0 and page.redirect == None:
+                if page.namespace == 0 and page.redirect == None and page.title != None:
                     # Clean title
                     title = replaceChars(page.title, replace)
 
@@ -81,6 +81,8 @@ def wikiLoader(folder, vocab, replace):
                     text: str = ""
                     for revision in page:
                         text = revision.text
+                    if text == "" or text is None:
+                        continue
                     text = replaceChars(text, replace)
 
                     # If the title and text are only using characters that are in vocab, then yield the title and text

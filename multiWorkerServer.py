@@ -356,7 +356,9 @@ while True:
         if client_socket == server_socket or client_socket in new_clients_list:
             continue
 
+        log.append(f"Waiting for R from {clients[client_socket]}")
         R = receive_nparrays(client_socket)
+        log.append(f"Received R from {clients[client_socket]}")
         if R is not None:
             workerInfo[client_socket] = (
                 workerInfo[client_socket][0],
@@ -370,6 +372,7 @@ while True:
 
         if workerInfo[client_socket][0] == receivingWeightsFrom:
             # If recieving weights, handle getting the weights
+            log.append(f"Waiting for weights from {clients[client_socket]}")
             weights = receive_nparrays(client_socket)
             if weights is None:
                 if client_socket in workerInfo:

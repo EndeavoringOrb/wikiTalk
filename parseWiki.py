@@ -1,41 +1,16 @@
+import bz2
 import mwxml
-from tqdm import tqdm
-from trainEmbed import vocab
-import os
 
-# Load the Wikipedia dump
-path = "wikiData\wiki0\enwiki-20240720-pages-articles-multistream1.xml-p1p41242"  # 27372
-path = "wikiData\wiki1\enwiki-20240720-pages-articles-multistream2.xml-p41243p151573"  # 83498
-path = "wikiData\wiki2\enwiki-20240720-pages-articles-multistream3.xml-p151574p311329"  # 89644
-path = "wikiData\wiki3\enwiki-20240720-pages-articles-multistream4.xml-p311330p558391"  # 140261
-path = "wikiData\wiki4\enwiki-20240720-pages-articles-multistream5.xml-p558392p958045"  # 228686
-path = "wikiData\wiki5\enwiki-20240720-pages-articles-multistream6.xml-p958046p1483661"  # 262117
-path = "wikiData\wiki6\enwiki-20240720-pages-articles-multistream7.xml-p1483662p2134111"  # 303592
+# Open the .bz2 file
+with bz2.open("wikiData/enwiki-20240720-pages-articles-multistream.xml.bz2", 'rt') as file:
+    # Use mwxml to parse the file
+    dump = mwxml.Dump.from_file(file)
 
-dump: mwxml.Dump = mwxml.Dump.from_file(path)
-
-invalidChars = {}
-numPages = 0
-
-# Iterate through pages
-for i, page in enumerate(tqdm(dump)):
-    if page.namespace == 0 and page.redirect == None and hasattr(page, "title"):
-        title = page.title
-        text: str = ""
+    # Iterate through the pages
+    for page in dump:
+        # Process each page as needed
+        print(page.title)
+        
+        # If you want to process revisions
         for revision in page:
-            text = revision.text
-
-        for char in title.lower():
-            if char not in vocab:
-                if char not in invalidChars:
-                    invalidChars[char] = 1
-                else:
-                    invalidChars[char] += 1
-                print(f"{i}: {title}, {len(text)}")
-    numPages += 1
-
-print(f"Num Pages: {numPages:,}")
-
-invalidChars = sorted(list(invalidChars.items()), key=lambda x: x[1])
-for char, freq in invalidChars:
-    print(f"{char}: {freq}")
+            print(revision.text)
