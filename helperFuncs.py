@@ -62,7 +62,7 @@ def getInfo(folder, vocab, replace):
 
 def wikiLoader(folder, vocab, replace):
     for subFolder in os.listdir(folder):
-        if subFolder.endswith(".txt"):
+        if subFolder.endswith(".txt") or subFolder.endswith(".bz2"):
             continue
         for file in os.listdir(f"{folder}/{subFolder}"):
             if file.endswith(".txt"):

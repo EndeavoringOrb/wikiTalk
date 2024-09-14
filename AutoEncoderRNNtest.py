@@ -37,7 +37,7 @@ while True:
 
     if foundArticle:
         print(f'Found article: "{text}"')
-        print(decode(pageTokens))
+        print(decode(tokens))
     else:
         print(f'No article found for "{text}"')
         continue
@@ -57,4 +57,5 @@ while True:
         decodedTokens.append(token)
         state = embedder.decoder(state, token)
 
-    print(f"Decoded: {decode(decodedTokens)}")
+    print(f"\n\n\nDecoded:")
+    print(decode(decodedTokens))
